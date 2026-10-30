@@ -111,7 +111,7 @@ class ProviderTests(unittest.TestCase):
     def test_minimax_prompt_schema_thinking_and_metadata(self):
         client = self.client("minimax")
         request, body = self.run_result(client, completion("<think>private reasoning</think>\n```json\n" + json.dumps(RESULT) + "\n```"))
-        self.assertEqual(request.full_url, "https://api.minimax.io/v1/chat/completions")
+        self.assertEqual(request.full_url, "https://api.minimax.cn/v1/chat/completions")
         self.assertNotIn("response_format", body)
         self.assertIn("JSON Schema", body["messages"][0]["content"])
         self.assertEqual(body["max_tokens"], 8000)
@@ -122,8 +122,28 @@ class ProviderTests(unittest.TestCase):
         self.assertNotIn("private_field", serialized)
 
     def test_minimax_china_endpoint(self):
-        request, _ = self.run_result(self.client("minimax", base_url="https://api.minimaxi.com/v1/"), completion())
-        self.assertEqual(request.full_url, "https://api.minimaxi.com/v1/chat/completions")
+        for host in ("api.minimax.cn", "api.minimaxi.com", "api.minimax.io"):
+            with self.subTest(host=host):
+                request, body = self.run_result(self.client("minimax", base_url=f"https://{host}/v1/"), completion())
+                self.assertEqual(request.full_url, f"https://{host}/v1/chat/completions")
+                self.assertEqual(request.get_header("Authorization"), "Bearer " + KEY)
+                self.assertEqual([m["role"] for m in body["messages"]], ["system", "user"])
+
+    def test_minimax_region_presets_are_independent_and_default_to_china(self):
+        option = next(o for o in provider_options() if o["id"] == "minimax")
+        self.assertEqual(option["base_url"], "https://api.minimax.cn/v1")
+        self.assertEqual({p["id"] for p in option["endpoint_presets"]}, {"cn", "cn_legacy", "intl"})
+        option["endpoint_presets"][0]["base_url"] = "https://wrong.example/v1"
+        self.assertEqual(next(o for o in provider_options() if o["id"] == "minimax")["endpoint_presets"][0]["base_url"], "https://api.minimax.cn/v1")
+
+    def test_minimax_china_errors_never_fall_back_to_international(self):
+        client = self.client("minimax")
+        error = HTTPError(client.base_url + "/chat/completions", 401, "Unauthorized", {}, BytesIO(b"private-body"))
+        with patch.object(client._opener, "open", side_effect=error) as opened:
+            with self.assertRaises(ProviderError):
+                client.generate_json("Extract", {}, SCHEMA)
+        self.assertEqual(opened.call_count, 1)
+        self.assertEqual(opened.call_args.args[0].full_url, "https://api.minimax.cn/v1/chat/completions")
 
     def test_custom_payload_and_explicit_vision(self):
         client = self.client("openai_compatible", base_url="https://gateway.example/api/v1", vision=True)

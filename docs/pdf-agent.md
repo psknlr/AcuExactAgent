@@ -11,7 +11,9 @@
 | MiniMax | OpenAI-compatible Chat Completions + 本地 JSON 校验 | `MiniMax-M2.5` | 本适配器只用于文字；扫描件配辅助视觉模型 | `MINIMAX_API_KEY` |
 | 自定义 OpenAI-compatible | Chat Completions + 本地 JSON 校验 | 用户填写 | 用户确认模型支持并开启 | 显式表单 key 或 CLI 指定环境变量 |
 
-模型名可编辑，示例不是账户模型可用性承诺。OpenAI/Claude 模型须支持对应结构化输出协议；不支持时会明确返回错误。MiniMax 支持国际 `https://api.minimax.io/v1`、中国 `https://api.minimaxi.com/v1` 和 `https://api.minimax.cn/v1`。自定义服务须 HTTPS，不能只把 Anthropic 原生 Messages 地址填成 OpenAI-compatible。
+模型名可编辑，示例不是账户模型可用性承诺。OpenAI/Claude 模型须支持对应结构化输出协议；不支持时会明确返回错误。MiniMax **默认使用国内站 `https://api.minimax.cn/v1`**，与当前[国内官方文档](https://platform.minimax.cn/docs/api-reference/text-openai-api)一致；界面的“MiniMax 服务站点”可切换国内原域名 `https://api.minimaxi.com/v1` 或国际站 `https://api.minimax.io/v1`，也可直接编辑 Base URL。使用所选站点对应的 API Key，切换站点会清空手动填写的 Key；后端 `MINIMAX_API_KEY` 须由使用者配置为对应站点凭据。请求失败不会自动切换域名或站点。
+
+MiniMax 通过 `POST {Base URL}/chat/completions` 与 `Authorization: Bearer <API Key>` 调用，不要把 `/chat/completions` 或 `/anthropic` 填进 Base URL。CLI 不填 `--base-url` 也默认国内站；如使用国内原域名，增加 `--base-url https://api.minimaxi.com/v1`，国际站增加 `--base-url https://api.minimax.io/v1`。自定义服务须 HTTPS，不能只把 Anthropic 原生 Messages 地址填成 OpenAI-compatible。
 
 “测试连接”才发出小型真实 API 请求，可能消耗 token；加载页面和切换供应商不调用模型。运行 PDF 智能体会将所选页的文字、版面信息及启用视觉时的图片发送到选定供应商。PDF 上传先保存在本机临时目录。API Key 不写入文件、浏览器存储、结果或日志；可留空使用服务进程的对应环境变量。关闭页面不会自动停止后台任务，使用取消按钮；停止本地服务清理临时文档。生产部署需另行配置认证和资源隔离，本服务只接受 localhost/127.0.0.1 访问。
 

@@ -4,7 +4,8 @@
 
 ## 已执行
 
-- `python -m unittest discover -s tests -v`：**123 项通过**。保留原版43项，新增28项供应商协议与错误测试、30项智能体状态/证据/预算测试、22项 PDF/任务/HTTP 集成测试。模型响应均由 fake 或 mock 提供，未调用真实付费 API。
+- `python -m unittest discover -s tests -v`：**125 项通过**。保留原版43项，新增30项供应商协议与错误测试、30项智能体状态/证据/预算测试、22项 PDF/任务/HTTP 集成测试。模型响应均由 fake 或 mock 提供，未调用真实付费 API。
+- MiniMax 国内接入复核：默认 `api.minimax.cn`，显式 `api.minimaxi.com` / `api.minimax.io` 均准确发送到所选端点，401不切换站点；独立浏览器检查国内默认、三站点切换、手动Key清空、实际提交配置、手动URL同步与控件显示。连接响应为模拟数据，未使用真实API Key。
 - 新增覆盖：GPT/Claude/MiniMax/custom请求格式、JSON Schema及一次修复、429/5xx有限重试、拒绝/截断、密钥不泄漏、视觉能力边界；多篇选择、越界/重叠区域拒绝、伪造引文拒绝、批量ID完整性、API失败保留引文、跨供应商HTTP预算及取消、视觉冲突不覆盖原文、同PDF不同文章ID；真实临时PDF上传/渲染与完整fake模型工作流。
 - `python -m acuexact demo`：8 条合成 gold 全部匹配，2 条精确病名排除；原文明示出处比较无误加、无错配。仅是合成回归结果，不是实际医学文献指标。
 - Editable 包安装成功，虚拟环境内再次运行 demo 成功。该虚拟环境复用预装依赖，未声称完成所有操作系统的全新依赖安装测试。

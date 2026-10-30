@@ -28,7 +28,11 @@ from referencing.exceptions import Unresolvable
 _PROVIDERS = {
     "openai": {"label": "OpenAI / GPT", "base_url": "https://api.openai.com/v1", "model": "gpt-4.1", "env": "OPENAI_API_KEY", "vision": True, "structured_output": "native_json_schema"},
     "anthropic": {"label": "Anthropic / Claude", "base_url": "https://api.anthropic.com/v1", "model": "claude-sonnet-4-6", "env": "ANTHROPIC_API_KEY", "vision": True, "structured_output": "native_json_schema"},
-    "minimax": {"label": "MiniMax", "base_url": "https://api.minimax.io/v1", "model": "MiniMax-M2.5", "env": "MINIMAX_API_KEY", "vision": False, "structured_output": "prompt_and_local_validation"},
+    "minimax": {"label": "MiniMax（国内 / 国际）", "base_url": "https://api.minimax.cn/v1", "model": "MiniMax-M2.5", "env": "MINIMAX_API_KEY", "vision": False, "structured_output": "prompt_and_local_validation",
+                "endpoint_presets": [
+                    {"id": "cn", "label": "国内站 · api.minimax.cn", "base_url": "https://api.minimax.cn/v1"},
+                    {"id": "cn_legacy", "label": "国内原域名 · api.minimaxi.com", "base_url": "https://api.minimaxi.com/v1"},
+                    {"id": "intl", "label": "国际站 · api.minimax.io", "base_url": "https://api.minimax.io/v1"}]},
     "openai_compatible": {"label": "Custom OpenAI-compatible", "base_url": "", "model": "", "env": "", "vision": True, "structured_output": "prompt_and_local_validation"},
 }
 _OFFICIAL_HOSTS = {"openai": {"api.openai.com"}, "anthropic": {"api.anthropic.com"}, "minimax": {"api.minimax.io", "api.minimaxi.com", "api.minimax.cn"}}
@@ -42,7 +46,7 @@ class ProviderError(ValueError):
 
 def provider_options() -> list[dict]:
     """Examples, not a live inventory of models available to the user's account."""
-    return [dict(id=name, provider=name, default_model=item["model"], **item) for name, item in _PROVIDERS.items()]
+    return [dict(id=name, provider=name, default_model=item["model"], **deepcopy(item)) for name, item in _PROVIDERS.items()]
 
 
 @dataclass(frozen=True)
