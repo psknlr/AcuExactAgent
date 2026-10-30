@@ -1,6 +1,6 @@
 # AcuExactAgent
 
-**针对“针刺治疗肩痛”文献的可追溯引文提取与分类 Agent。** 从 EndNote 记录定位目标文章，按页面区域提取全部引号内容，保留逐字证据，再做强弱相关分类与出处核证。提供无需 API 密钥的中文浏览器演示、命令行批处理和金标准评测。
+**PDF + 研究 prompt → 古籍引文、强弱相关、维度与理由。** 中文工作台可直接导入 PDF，接入 OpenAI/GPT、Anthropic/Claude、MiniMax 或自定义 OpenAI-compatible API。智能体规划文章范围、读取选区、逐字提取、模型查漏与修复、批量分类并校验结果。保留页码、原页预览和出处证据。另提供无需密钥的离线样例、人工圈区批处理与金标准评测。
 
 > 数据状态：实际检查 `OneDrive_1_10-29-2026.zip`，包含 **5,232 份 PDF**，未包含人工金标准或 EndNote 记录。当前仓库的演示金标准是明确标记的**合成测试夹具**，不能代表真实文献准确率。本项目未声称已完成 5,232 份文献的全文提取或人工金标准验证。详见 [数据审计](docs/dataset-audit.md)。
 
@@ -32,9 +32,11 @@ python -m acuexact demo --out outputs/demo
 python -m acuexact serve --port 8765
 ```
 
-浏览器打开 **http://127.0.0.1:8765**。可载入合成边界样例、粘贴已圈定文章文本、查看原文证据与分类理由、筛选、复制 Excel 表格、下载 TSV / JSON。示例包含病名排除、弱相关短词保留、缺失出处、重复引文、跨页引文、同页邻文隔离。演示文本中的《演示医籍》是虚构测试书名。
+浏览器打开 **http://127.0.0.1:8765**。导入 PDF、填写任务 prompt、选择供应商和模型、输入 API Key 后点击运行。扫描件启用视觉模型；MiniMax 文字模型可搭配独立 GPT/Claude 视觉配置。含多篇文章时填写 EndNote 对应标题。结果可筛选、核对原页与矩形证据、复制到 Excel、下载 TSV / JSON。
 
-也可使用 Docker（构建需网络；运行不需要模型）：
+“离线合成样例”无需密钥，包含病名排除、弱相关短词保留、缺失出处、重复及跨页引文、同页邻文隔离。它使用虚构《演示医籍》，不会冒充真实 API 结果。详见 [PDF 智能体与 API 接入](docs/pdf-agent.md)。
+
+也可使用 Docker（离线样例无需模型；PDF 智能体需 API Key）：
 
 ```bash
 docker build -t acuexact .
@@ -57,7 +59,7 @@ flowchart LR
     H --> J
 ```
 
-实现为明确分工的 Python 阶段，而非多个模型相互投票：定位规划、区域读取、引文提取、分类、出处查证和审计评测均可独立复跑。模型只能给分类，不能改写或删掉提取的原文。离线规则用于可复现基线，不能替代专家分类。
+PDF 智能体按“规划 → 工具执行 → 查漏 → 受限修复 → 分类 → 校验”运行。模型可选择区域和提出补提候选，本地程序验证候选是否逐字存在；分类不允许修改、删除原文。视觉转录与自动边界始终需要复核。离线规则用于可复现基线，不能替代模型或专家分类。
 
 ### 规则与输出约束
 
@@ -127,7 +129,7 @@ python -m acuexact extract --pdf paper.pdf --manifest article.json --ocr --out o
 
 ### 5. 可选模型与出处检索
 
-默认离线。仅 `--llm` 会调用 OpenAI Responses API；先在环境变量中配置 `OPENAI_API_KEY` 和 `OPENAI_MODEL`（填入你账户可用的模型 ID）。`.env.example` 仅作变量说明，程序不会自动加载 `.env`。
+以下是旧版人工圈区 `extract` 的可选分类接口：`--llm` 调用 OpenAI Responses API，使用 `OPENAI_API_KEY` 和 `OPENAI_MODEL`。新版直接输入 PDF 的 `agent` 命令支持多供应商、自定义 prompt 与独立视觉模型，见 [使用说明](docs/pdf-agent.md)。`.env.example` 仅作变量说明，程序不会自动加载 `.env`。
 
 ```bash
 python -m acuexact extract --pdf paper.pdf --manifest article.json --llm --out outputs/llm

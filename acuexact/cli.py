@@ -18,6 +18,26 @@ def main(argv=None):
     server = commands.add_parser("serve", help="Start local browser demo")
     server.add_argument("--port", type=int, default=8765)
     server.add_argument("--host", choices=["127.0.0.1", "0.0.0.0"], default="127.0.0.1")
+    agent = commands.add_parser("agent", help="PDF + prompt -> multi-provider extraction, audit, classification")
+    agent.add_argument("--pdf", required=True)
+    task_prompt = agent.add_mutually_exclusive_group(required=True)
+    task_prompt.add_argument("--prompt")
+    task_prompt.add_argument("--prompt-file")
+    agent.add_argument("--provider", choices=["openai", "anthropic", "minimax", "openai_compatible"], default="openai")
+    agent.add_argument("--model")
+    agent.add_argument("--base-url", default="")
+    agent.add_argument("--api-key-env", help="Name of environment variable; never put a key in command history")
+    agent.add_argument("--vision", action="store_true")
+    agent.add_argument("--vision-provider", choices=["openai", "anthropic", "openai_compatible"])
+    agent.add_argument("--vision-model")
+    agent.add_argument("--vision-base-url", default="")
+    agent.add_argument("--vision-key-env")
+    agent.add_argument("--title", default="", help="Target article title from EndNote, especially for multi-article PDFs")
+    agent.add_argument("--pages", default="", help="Physical PDF pages, e.g. 1-3,5")
+    agent.add_argument("--max-pages", type=int, default=30)
+    agent.add_argument("--max-calls", type=int, default=80)
+    agent.add_argument("--timeout", type=float, default=60)
+    agent.add_argument("--out", default="outputs/agent")
     inv = commands.add_parser("inventory")
     inv.add_argument("--zip", required=True); inv.add_argument("--out", required=True)
     select = commands.add_parser("unpack")
@@ -60,6 +80,32 @@ def main(argv=None):
         elif args.command == "serve":
             from .server import serve
             serve(args.port, args.host)
+        elif args.command == "agent":
+            import os
+            from .agent import run_pdf_agent
+            from .pdf import open_pdf
+            from .providers import ModelClient, ProviderConfig, provider_options
+            from .workspace import parse_pages
+            defaults = {p["id"]: p["default_model"] for p in provider_options()}
+            def key(variable):
+                if variable and not os.environ.get(variable):
+                    raise ValueError(f"Environment variable {variable} is not set")
+                return os.environ.get(variable, "") if variable else ""
+            client = ModelClient(ProviderConfig(args.provider, args.model or defaults[args.provider], key(args.api_key_env), args.base_url, args.timeout, vision=args.vision))
+            vision_client = ModelClient(ProviderConfig(args.vision_provider, args.vision_model or defaults[args.vision_provider], key(args.vision_key_env), args.vision_base_url, args.timeout, vision=True)) if args.vision_provider else None
+            client._key()
+            if vision_client:
+                vision_client._key()
+            with open_pdf(args.pdf) as pdf:
+                pages = parse_pages(args.pages, len(pdf.pages))
+            prompt = Path(args.prompt_file).read_text(encoding="utf-8-sig") if args.prompt_file else args.prompt
+            result = run_pdf_agent(args.pdf, prompt, client, target_title=args.title, page_numbers=pages,
+                                   max_pages=args.max_pages, max_calls=args.max_calls, vision_client=vision_client,
+                                   on_event=lambda event: print(f"[{event.get('stage', '')}] {event.get('message', '')}", flush=True))
+            write_result(result, args.out)
+            print(f"{len(result['quotes'])} quotes; status={result['status']} -> {args.out}")
+            if result["status"] in {"needs_scope", "failed", "cancelled"}:
+                return 1
         elif args.command == "inventory":
             report = inventory_zip(args.zip)
             write_json(args.out, report)

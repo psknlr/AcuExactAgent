@@ -12,6 +12,9 @@
 | 来源检索 | retrieval | 明确启用联网；正文精确匹配；检索命中只是候选 |
 | 核证补全 | classification.enrich_source | 仅采纳带审核人与证据的 catalog；冲突保留待审 |
 | 评测导出 | evaluation / export | gold 不进入推理；逐条多重集匹配；TSV 公式防护 |
+| PDF 智能体 | agent | 模型规划选区、视觉读取、查漏与限次修复、逐批分类、不可变证据校验 |
+| API 适配 | providers | OpenAI Responses / Claude Messages / MiniMax / 自定义；结构与错误校验、有限重试 |
+| 本地任务 | workspace / server | 临时 PDF、限量队列、异步进度、取消、原页预览；密钥不持久化 |
 
 这是可审计的阶段式 Agent 基线，不是经过真实金标准训练的模型，也不声称具备无需人工复核的万能 OCR、分篇或古籍考证能力。
 
@@ -56,7 +59,9 @@
 
 ## 可选模型
 
-使用 Responses API 的 `text.format` 严格 JSON Schema，模型只返回 label、dimensions、reason、needs_review；额外字段、不完整响应、拒绝、非法维度或没有维度的“强相关”均拒绝接受。输入引文作为 JSON 数据，系统指令不采纳引文中的命令。`store:false`，固定 OpenAI HTTPS 端点，不读取用户提供的任意 API 主机。API 报错不会记录密钥或响应正文，不悄悄假装模型成功。
+新版 `agent` 的模型接口详见 [PDF 智能体](pdf-agent.md)。OpenAI 使用 `text.format`，Claude 使用 `output_config.format`；MiniMax 和自定义兼容接口使用提示词 JSON 与本地 jsonschema 校验，不能等同于原生严格输出。兼容接口格式不合格最多修复一次；429/5xx 最多额外重试两次，超时不重发，HTTP 重定向不转发密钥。主/视觉模型共享请求预算，修复和重试也计入。
+
+旧 `extract --llm` 仍提供 OpenAI 分类接口。所有路径均把 PDF/引文当待分析数据，模型分类只返回 ID、label、dimensions、reason、needs_review，不能更改原文或补出处。不完整响应、拒绝、非法维度、缺少/重复/多出的 ID 和没有维度的“强相关”均拒绝接受。OpenAI 设置 `store:false`。自定义 API 须使用明确选择的 HTTPS 兼容端点和独立凭据；官方供应商固定官方主机。错误不记录凭据或响应正文。
 
 参考：[OpenAI Structured Outputs](https://developers.openai.com/api/docs/guides/structured-outputs?api-mode=responses)。模型性能和供应商存储策略需以实际账户、模型及其文档为准；此项目仅显式设置不保存 Responses 对象。
 
