@@ -1,0 +1,10 @@
+[
+  {
+    "book": "演示医籍",
+    "chapter": "合成测试篇",
+    "evidence": "肩背疼痛，循经取穴。",
+    "url": "https://example.org/synthetic-not-a-real-source",
+    "verified": false,
+    "reviewer": ""
+  }
+]

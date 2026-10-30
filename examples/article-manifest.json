@@ -1,0 +1,10 @@
+{
+  "article": {"id": "ENDNOTE_RECORD_ID", "title": "EndNote中的目标文章标题", "authors": ["作者"], "year": "年份"},
+  "pdf_sha256": "REPLACE_WITH_HASH_FROM_INSPECTION_JSON",
+  "boundary_status": "pending_review",
+  "reviewer": "",
+  "regions": [
+    {"id": "p1-left", "page": 1, "bbox": [40, 80, 290, 700]},
+    {"id": "p1-right-upper", "page": 1, "bbox": [310, 80, 560, 350]}
+  ]
+}
