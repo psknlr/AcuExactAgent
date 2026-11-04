@@ -5,7 +5,7 @@ import unittest
 from unittest.mock import patch
 import zipfile
 
-from acuexact.agent_batch import CheckpointClient, pipeline_complete, run_batch, select_jobs
+from acuexact.agent_batch import CheckpointClient, _run_one, pipeline_complete, run_batch, select_jobs
 from acuexact.providers import ModelClient, ProviderConfig
 
 
@@ -82,3 +82,19 @@ class AgentBatchTests(unittest.TestCase):
                 self.assertEqual(progress["state"], "finished")
                 with self.assertRaisesRegex(ValueError, "differs"):
                     run_batch(source, output, "different research", config, workers=1)
+
+    def test_retry_archives_prior_evidence_before_replacing_result(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            article = root / "article-1"; article.mkdir()
+            old = {"status": "needs_review", "quotes": [{"text": "先前的原文证据"}], "audit": {}}
+            (article / "result.json").write_text(json.dumps(old))
+            job = {"id": "article-1", "title": "paper", "pdf": "fixture.pdf"}
+            settings = {"out": directory, "prompt": "extract", "max_pages": 20, "max_calls": 80,
+                        "config": {"provider": "minimax", "model": "MiniMax-M3.1-Flash"}}
+            new = {"status": "needs_review", "quotes": [], "warnings": [], "audit": {"stages": ["review_quotes"]}}
+            with patch("acuexact.agent.run_pdf_agent", return_value=new):
+                self.assertEqual(_run_one(job, settings)["state"], "done")
+            prior = next(article.glob("attempts/*/result.json"))
+            self.assertEqual(json.loads(prior.read_text()), old)
+            self.assertEqual(json.loads((article / "result.json").read_text()), new)

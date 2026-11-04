@@ -8,6 +8,7 @@ import multiprocessing
 import os
 from pathlib import Path
 import re
+import shutil
 import time
 import zipfile
 
@@ -99,6 +100,11 @@ def _run_one(job, settings):
     try:
         previous = directory / "result.json"
         if previous.exists():
+            archived = directory / "attempts" / str(time.time_ns())
+            archived.mkdir(parents=True)
+            shutil.copy2(previous, archived / "result.json")
+            if (directory / "quotes.tsv").exists():
+                shutil.copy2(directory / "quotes.tsv", archived / "quotes.tsv")
             old = json.loads(previous.read_text(encoding="utf-8"))
             # JSON/schema-valid outputs can still fail semantic checks. Do not
             # replay a rejected plan or classification indefinitely on resume.
