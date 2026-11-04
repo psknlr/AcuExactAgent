@@ -8,7 +8,7 @@
 | --- | --- | --- | --- | --- |
 | OpenAI / GPT | Responses + 严格 JSON Schema | `gpt-4.1` | 开启视觉后可用，须模型本身支持 | `OPENAI_API_KEY` |
 | Anthropic / Claude | Messages + `output_config.format` | `claude-sonnet-4-6` | 开启视觉后可用，须模型本身支持 | `ANTHROPIC_API_KEY` |
-| MiniMax | OpenAI-compatible Chat Completions + 本地 JSON 校验 | `MiniMax-M2.5` | 本适配器只用于文字；扫描件配辅助视觉模型 | `MINIMAX_API_KEY` |
+| MiniMax | OpenAI-compatible Chat Completions + 本地 JSON 校验 | `MiniMax-M3.1-Flash` | 开启视觉后支持图片；M2 系列仍仅支持文字 | `MINIMAX_API_KEY` |
 | 自定义 OpenAI-compatible | Chat Completions + 本地 JSON 校验 | 用户填写 | 用户确认模型支持并开启 | 显式表单 key 或 CLI 指定环境变量 |
 
 模型名可编辑，示例不是账户模型可用性承诺。OpenAI/Claude 模型须支持对应结构化输出协议；不支持时会明确返回错误。MiniMax **默认使用国内站 `https://api.minimax.cn/v1`**，与当前[国内官方文档](https://platform.minimax.cn/docs/api-reference/text-openai-api)一致；界面的“MiniMax 服务站点”可切换国内原域名 `https://api.minimaxi.com/v1` 或国际站 `https://api.minimax.io/v1`，也可直接编辑 Base URL。使用所选站点对应的 API Key，切换站点会清空手动填写的 Key；后端 `MINIMAX_API_KEY` 须由使用者配置为对应站点凭据。请求失败不会自动切换域名或站点。
@@ -23,14 +23,14 @@ PowerShell 配置主模型后运行（将占位内容替换为自己的凭据与
 
 ```powershell
 $env:MINIMAX_API_KEY = "YOUR_KEY"
-python -m acuexact agent --pdf paper.pdf --provider minimax --model MiniMax-M2.5 --prompt-file examples/research-prompt.txt --title "EndNote 中的文章标题" --out outputs/minimax
+python -m acuexact agent --pdf paper.pdf --provider minimax --model MiniMax-M3.1-Flash --prompt-file examples/research-prompt.txt --title "EndNote 中的文章标题" --out outputs/minimax
 ```
 
-扫描件由 Claude 读图，MiniMax 负责研究分类：
+可选独立视觉模型：以下由 Claude 读图、MiniMax 负责研究分类；`--vision-provider minimax --vision-model MiniMax-M3.1-Flash` 也可独立负责读图：
 
 ```powershell
 $env:ANTHROPIC_API_KEY = "YOUR_KEY"
-python -m acuexact agent --pdf paper.pdf --provider minimax --model MiniMax-M2.5 --vision-provider anthropic --vision-model claude-sonnet-4-6 --prompt-file examples/research-prompt.txt --pages 1-5 --out outputs/scan
+python -m acuexact agent --pdf paper.pdf --provider minimax --model MiniMax-M3.1-Flash --vision-provider anthropic --vision-model claude-sonnet-4-6 --prompt-file examples/research-prompt.txt --pages 1-5 --out outputs/scan
 ```
 
 GPT 同时负责文字与视觉：
@@ -43,7 +43,7 @@ python -m acuexact agent --pdf paper.pdf --provider openai --model gpt-4.1 --vis
 
 ## 执行与质量约束
 
-1. 本地读取 PDF 和文字质量。扫描、乱码、引号异常会触发视觉读取或明确待审。每张图片限制长边约 1900 px，转录保留原文字层和不确定项。
+1. 本地读取 PDF 和文字质量。扫描、乱码、引号异常会触发视觉读取或明确待审。每张图片最高 180 DPI、限制长边约 1900 px，转录保留原文字层和不确定项。
 2. 模型根据标题、页码、文本坐标、分隔线和视觉版面规划一篇文章的有序选区。存在多篇而未选标题，返回候选标题要求选择，不默认混合整份 PDF。选区必须在页面内且互不重叠。
 3. 本地扫描全部成对中文引号，仅排除精确病名；模型查漏候选必须在原始选区逐字对齐。视觉转录始终标记待复核，不能当作原 PDF 字符的精确金标准。
 4. 按输入 prompt 每批最多 20 条分类，检查 ID 不漏不重、标签和维度有效、理由非空；失败允许一次修复，仍失败则保留原文并显示“待分类”。
@@ -59,6 +59,33 @@ python -m acuexact agent --pdf paper.pdf --provider openai --model gpt-4.1 --vis
 
 `POST /api/uploads` 接收原始 `application/pdf`，`X-Filename` 为 URI 编码的文件名。返回临时 document_id。`POST /api/jobs` 接收 document_id、prompt、target_title、pages、config 与可选 vision_config；返回 job_id。`GET /api/jobs/{id}` 获取状态、阶段事件和 result。`POST /api/jobs/{id}/cancel` 取消后续步骤。`GET /api/documents/{id}/pages/{page}.png` 预览原页。`GET /api/providers` 返回可用适配器与环境变量是否已设置；不会返回密钥。
 
-已经用模拟 API 验证各供应商请求协议、结构化响应、重试与失败路径；没有使用用户真实 API Key 做远端模型效果测试。扫描识别、自动分篇、强弱分类均可能出错，需要原页复核。原压缩包缺少真实人工 gold，因此没有实际准确率承诺。
+已经用模拟 API 验证各供应商请求协议、结构化响应、重试与失败路径。2026-11-03 已用中国内地 MiniMax 接口和 `MiniMax-M3.1-Flash` 跑通一篇真实乱码文字层 PDF 的读图、分区、提取、查漏和分类（10 次请求）。这验证了接口与流程，不构成准确率评测。扫描识别、自动分篇、强弱分类均可能出错，需要原页复核。原压缩包缺少真实人工 gold，因此没有实际准确率承诺。
 
 官方协议依据：[OpenAI Structured Outputs](https://developers.openai.com/api/docs/guides/structured-outputs)、[Claude Structured Outputs](https://platform.claude.com/docs/en/build-with-claude/structured-outputs)、[Claude Vision](https://platform.claude.com/docs/en/build-with-claude/vision)、[MiniMax OpenAI-compatible API](https://platform.minimax.io/docs/api-reference/text-openai-api)。
+
+## MiniMax M3.1 Flash 视觉与批处理
+
+主模型可直接读图，无需另配 GPT/Claude：
+
+```bash
+python -m acuexact agent --pdf paper.pdf --provider minimax --model MiniMax-M3.1-Flash --vision --reasoning-effort low --max-tokens 16000 --timeout 180 --prompt-file examples/research-prompt.txt --title "目标文章标题" --out outputs/minimax
+```
+
+MiniMax 使用 `max_completion_tokens`；M3.1 通过 `reasoning_effort` 调整思考深度，支持 `low/medium/high/xhigh/max`，不能关闭 thinking。适配器只解析最终 `content`，不保存 `reasoning_content`。JSON 仍采用提示词约束、本地 schema 校验及一次修复，未声称支持原生严格 JSON。图片通过 `image_url` 发送 base64 data URL，沿用每张 5 MB、最多 20 张的本地限制。
+
+批处理读取 ZIP 或 PDF 文件夹，按目录、文件名中的数字自然排序；默认取前 350 篇。请先用 `--limit 1` 验证目标资料，再扩大范围：
+
+```bash
+python -m acuexact agent-batch --source papers.zip --limit 350 --workers 8 --provider minimax --model MiniMax-M3.1-Flash --reasoning-effort low --timeout 180 --prompt-file examples/research-prompt.txt --out outputs/minimax_350
+```
+
+- `--start 1` 指定自然排序后的起点；`--prefix "CNKI 1_1187_paper_original/"` 限定文件夹。文件名去掉开头编号作为目标标题，去掉末尾独立数字的下载重名后缀；标题匹配仅规范常见繁简异体、全半角及“针剌/针刺”等书目写法；正文从不应用这些替换。标题不匹配会保留 `needs_scope`，不会自动混入其他文章。
+- 独立进程并行，避免 PDF 渲染库跨线程冲突。批量模式直接用页面图像规划，然后只转录选定文章区域，省去重复的整页转录；使用高细节图片输入。并发可用 `--workers` 调整；请求预算、超时和页数限制均逐篇生效。
+- 每篇立即保存到 `article-*/result.json`、`quotes.tsv`、`status.json`、`events.jsonl`。根目录的 `quotes.tsv`、`results.json`、`progress.json` 在每篇结束时原子更新；`manifest.json` 固定文件选择和运行配置。
+- TSV 的“文件名（中文）”列保留来源 PDF 的原始文件名（含编号和 `.pdf` 后缀），与 JSON 的 `source_pdf_filename` 对应；使用 ZIP 内的文件名，不使用内部暂存编号或推断的文章标题。续跑旧批次时会补齐这一列，无需重新调用模型。
+- 分类请求使用短条号（`q1` 至 `q20`）并在 schema 中枚举允许值，避免模型抄错较长的来源条号；本地保存审计映射，输出继续使用原始条号。重复出现的同文引文保留为独立记录。
+- 处理学位论文等长文献时加 `--long-documents`：超过 20 页的 PDF 按 10 页一组确认文章与续文边界，完整处理全部页面，`--max-calls` 预算按组生效。每组保存 `parts/part-*/result.json`；有效文字层直接用于规划和提取，损坏文字层仍读图，标题或坐标校验失败时补做图像规划。合并时保留原始页码与区域证据，并补回跨组引文；边界不明或任何一组未完成时不会标记完整结束。旧分组只有来源哈希、prompt、模型、标题和页码一致时才复用。
+- 结构异常的 PDF 会在临时副本中规范化交叉引用、页面树或页面尺寸；原始文件与来源 SHA256 保持不变。无法恢复时保留失败状态，不作为零引文结果。
+- 同一命令再次运行，会跳过完整结束的文章，重跑未完成项；每篇 `checkpoints/` 保存通过 JSON/schema 校验的阶段结果，复用相同证据的转录。重跑前的 JSON/TSV 另存到 `attempts/`，保留既有证据。语义校验失败的规划和分类不会永久缓存重放。检查点含文献转录文字，仅保存在本地。来源、prompt、模型或配置变化时必须使用新输出目录。密钥只从供应商环境变量读取，不保存到清单或结果。
+- 在输出目录创建名为 `STOP` 的文件，停止派发任务并在下次模型调用前取消进行中任务。恢复前删除 `STOP`，重新运行原命令。
+- `pipeline_complete=true` 表示提取、查漏和分类流程结束；自动边界与视觉证据仍标为 `needs_review`。`needs_attention` 表示流程未完成，需要检查对应告警；不能把失败当作零引文。处理结束有未完成项时返回非零退出码。

@@ -133,6 +133,12 @@ class WorkspaceTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "视觉能力"):
             self.workspace.start(payload(doc, vision_config={"provider": "anthropic", "model": "claude-sonnet-4-6", "api_key": KEY, "vision": False}))
 
+    def test_minimax_flash_can_be_a_visual_client(self):
+        client = make_client({"provider": "minimax", "model": "MiniMax-M3.1-Flash",
+                              "api_key": KEY, "vision": True, "reasoning_effort": "low"})
+        self.assertTrue(client.config.vision)
+        self.assertEqual(client.config.reasoning_effort, "low")
+
     def test_async_job_progress_result_and_copy_are_retained(self):
         seen = {}
         def runner(path, prompt, client, **kwargs):

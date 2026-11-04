@@ -78,6 +78,18 @@ class FakeClient:
 
 
 class AgentTests(unittest.TestCase):
+    def test_classification_uses_short_ids_without_changing_occurrence_ids(self):
+        client = FakeClient()
+        result = self.run_agent('正文“肩臂疼痛。”另一次“肩臂疼痛。”', client)
+        request = next(r for r in client.requests if r["stage"] == "classify_quotes")
+        self.assertEqual([q["id"] for q in request["payload"]["quotes"]], ["q1", "q2"])
+        self.assertEqual(request["schema"]["properties"]["results"]["items"]["properties"]["id"]["enum"], ["q1", "q2"])
+        self.assertEqual(result["audit"]["classification_id_aliases"],
+                         [{"q1": result["quotes"][0]["id"], "q2": result["quotes"][1]["id"]}])
+        self.assertTrue(all(q["id"].startswith(result["article"]["id"] + ":q") for q in result["quotes"]))
+        self.assertEqual(len({q["id"] for q in result["quotes"]}), 2)
+        self.assertTrue(all(q["relevance"]["method"] == "llm_agent" for q in result["quotes"]))
+
     def setUp(self):
         self.directory = tempfile.TemporaryDirectory()
         self.addCleanup(self.directory.cleanup)
@@ -130,6 +142,45 @@ class AgentTests(unittest.TestCase):
         result = self.run_agent(client=FakeClient({"plan_article": plan(title="错误的另一篇文章")}), target_title="肩痛研究")
         self.assertEqual(result["status"], "needs_scope")
         self.assertFalse(result["quotes"])
+
+    def test_bibliographic_title_variants_do_not_rewrite_quote_evidence(self):
+        for target, visible in (("针刺阳蹻脉治疗肩关节周围炎", "针刺阳跷脉治疗肩关节周围炎"),
+                                ("针剌条口穴治疗肩周炎", "针刺条口穴治疗肩周炎")):
+            with self.subTest(target=target):
+                result = self.run_agent(text='原文“針剌陽蹻脈。”',
+                                        client=FakeClient({"plan_article": plan(title=visible)}),
+                                        target_title=target)
+                self.assertNotEqual(result["status"], "needs_scope")
+                self.assertEqual(result["quotes"][0]["text"], "針剌陽蹻脈。")
+
+    def test_visual_title_mismatch_rechecks_image_once(self):
+        transcript = {"text": '肩痛研究“引文保留。”', "uncertainties": [], "confidence": .9}
+        client = FakeClient({"plan_article": [plan(title="误读标题"), plan(title="肩痛研究")],
+                             "region_transcription": transcript}, vision=True)
+        result = self.run_agent(client=client, target_title="肩痛研究")
+        planning = [r for r in client.requests if r["stage"] == "plan_article"]
+        self.assertEqual(len(planning), 2)
+        self.assertIn("validation_error", planning[1]["payload"])
+        self.assertTrue(planning[1]["images"])
+        self.assertNotEqual(result["status"], "needs_scope")
+
+    def test_visual_recheck_still_rejects_another_article(self):
+        client = FakeClient({"plan_article": plan(title="另一篇文章")}, vision=True)
+        result = self.run_agent(client=client, target_title="肩痛研究")
+        self.assertEqual(result["status"], "needs_scope")
+        self.assertFalse(result["quotes"])
+
+    def test_batch_can_plan_scan_from_image_then_transcribe_selected_regions(self):
+        transcript = {"text": '肩痛研究“引文保留。”', "uncertainties": [], "confidence": .9}
+        client = FakeClient({"region_transcription": transcript}, vision=True)
+        result = self.run_agent(text="(cid:123)", client=client, transcribe_pages=False)
+        stages = [r["stage"] for r in client.requests]
+        self.assertNotIn("page_transcription", stages)
+        self.assertIn("region_transcription", stages)
+        planning = client.requests[0]
+        self.assertTrue(planning["images"])
+        self.assertEqual(planning["payload"]["pages"][0]["text"], "")
+        self.assertEqual([q["text"] for q in result["quotes"]], ["引文保留。"])
 
     def test_articles_in_same_pdf_have_distinct_stable_ids(self):
         first = self.run_agent(client=FakeClient({"plan_article": plan(title="肩痛研究")}), target_title="肩痛研究")

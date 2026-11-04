@@ -4,7 +4,7 @@ import io
 import json
 from pathlib import Path
 
-HEADERS = ["条号", "文章ID", "古籍条文", "强弱相关类别", "相关维度", "归类理由",
+HEADERS = ["条号", "文章ID", "文件名（中文）", "古籍条文", "强弱相关类别", "相关维度", "归类理由",
            "原文明示书名", "原文明示篇章", "查证补全书名", "查证补全篇章", "查证链接", "查证状态", "页码", "待审标记"]
 
 
@@ -19,7 +19,7 @@ def to_tsv(quotes):
     writer.writerow(HEADERS)
     for q in quotes:
         r, s, e = q.get("relevance", {}), q.get("source_explicit", {}), q.get("source_enriched", {})
-        writer.writerow(map(excel_safe, [q.get("id"), q.get("article_id"), q.get("text"),
+        writer.writerow(map(excel_safe, [q.get("id"), q.get("article_id"), q.get("source_pdf_filename"), q.get("text"),
             r.get("label"), "；".join(r.get("dimensions", [])), r.get("reason"), s.get("book"),
             s.get("chapter"), e.get("book"), e.get("chapter"), e.get("url"), e.get("status", "待查证"),
             ",".join(str(p) for p in sorted({x["page"] for x in q.get("evidence", []) if "page" in x})),
@@ -27,7 +27,11 @@ def to_tsv(quotes):
     return buffer.getvalue()
 
 
-def write_result(result, directory):
+def write_result(result, directory, *, source_filename=None):
+    if source_filename is not None:
+        result["source_pdf_filename"] = source_filename
+        for quote in result["quotes"]:
+            quote["source_pdf_filename"] = source_filename
     out = Path(directory)
     out.mkdir(parents=True, exist_ok=True)
     (out / "result.json").write_text(json.dumps(result, ensure_ascii=False, indent=2), encoding="utf-8")

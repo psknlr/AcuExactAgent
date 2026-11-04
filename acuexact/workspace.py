@@ -39,13 +39,11 @@ def parse_pages(value, total):
 def make_client(value):
     if not isinstance(value, dict):
         raise ValueError("请配置模型供应商与模型名称。")
-    allowed = {"provider", "model", "api_key", "base_url", "timeout", "max_tokens", "vision"}
+    allowed = {"provider", "model", "api_key", "base_url", "timeout", "max_tokens", "vision", "reasoning_effort"}
     if set(value) - allowed:
         raise ValueError("模型配置包含不支持的字段。")
     try:
         client = ModelClient(ProviderConfig(**value))
-        if client.config.provider == "minimax" and client.config.vision:
-            raise ValueError("MiniMax 文字适配器不支持图片；请关闭主模型视觉并配置独立 GPT/Claude 视觉模型。")
         return client
     except TypeError:
         raise ValueError("模型配置不完整或字段类型不正确。") from None
