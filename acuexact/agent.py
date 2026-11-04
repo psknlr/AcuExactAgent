@@ -174,9 +174,10 @@ def _safe_reason(exc):
     return f"模型调用或响应校验未完成（{type(exc).__name__}）；保留原文并标记待审。"
 
 
-def _class_schema(dimensions):
+def _class_schema(dimensions, ids=None):
     return _object({"results": {"type": "array", "items": _object({
-        "id": STRING, "label": {"type": "string", "enum": ["强相关", "弱相关"]},
+        "id": {"type": "string", "enum": list(ids)} if ids is not None else STRING,
+        "label": {"type": "string", "enum": ["强相关", "弱相关"]},
         "dimensions": {"type": "array", "items": {"type": "string", "enum": dimensions}},
         "reason": STRING, "needs_review": BOOL})}})
 
@@ -582,14 +583,18 @@ def run_pdf_agent(pdf_path, prompt, client, *, target_title="", page_numbers=Non
             snapshot = {q["id"]: (q["text"], copy.deepcopy(q["source_explicit"])) for q in result["quotes"]}
             for start in range(0, len(result["quotes"]), 20):
                 batch = result["quotes"][start:start + 20]
+                aliases = {f"q{index + 1}": quote for index, quote in enumerate(batch)}
+                result["audit"].setdefault("classification_id_aliases", []).append(
+                    {alias: quote["id"] for alias, quote in aliases.items()})
                 payload = {"user_prompt": prompt, "article": article, "dimensions": dimensions,
-                           "quotes": [{"id": q["id"], "text": q["text"], "source_explicit": q["source_explicit"]} for q in batch]}
+                           "quotes": [{"id": alias, "text": q["text"], "source_explicit": q["source_explicit"]}
+                                      for alias, q in aliases.items()]}
                 mapping, error = None, None
                 for attempt in range(2):
                     try:
                         response = call("classify_quotes" if attempt == 0 else "repair_classification", CLASSIFY_SYSTEM,
-                                        payload, _class_schema(dimensions))
-                        mapping = _validate_classification(response, [q["id"] for q in batch], dimensions)
+                                        payload, _class_schema(dimensions, aliases))
+                        mapping = _validate_classification(response, aliases, dimensions)
                         break
                     except (_Cancelled, _CallLimit):
                         raise
@@ -599,14 +604,14 @@ def run_pdf_agent(pdf_path, prompt, client, *, target_title="", page_numbers=Non
                             payload = dict(payload, validation_error="上次输出的 JSON、id 完整性、标签、维度或理由校验失败。", instruction="重新输出本批所有 id，每个一次，修正格式。")
                         else:
                             break
-                for quote in batch:
+                for alias, quote in aliases.items():
                     if mapping is None:
                         quote["relevance"] = {"label": "待分类", "dimensions": [],
                             "reason": "尚未完成模型分类，请复核或重新运行。" + (error or ""),
                             "method": "unclassified", "model": _model(client), "needs_review": True}
                         quote["review_flags"].append("classification_failed")
                     else:
-                        quote["relevance"] = {k: mapping[quote["id"]][k] for k in ("label", "dimensions", "reason", "needs_review")}
+                        quote["relevance"] = {k: mapping[alias][k] for k in ("label", "dimensions", "reason", "needs_review")}
                         quote["relevance"].update(method="llm_agent", model=_model(client))
                     if (quote["text"], quote["source_explicit"]) != snapshot[quote["id"]]:
                         raise ValueError("分类阶段改变了原文证据")

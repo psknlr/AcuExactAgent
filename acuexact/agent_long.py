@@ -17,6 +17,7 @@ def merge_parts(parts):
     merged = copy.deepcopy(parts[0])
     merged.update(quotes=[], excluded=[], segments=[], warnings=[])
     merged["audit"].update(selected_pages=[], regions=[], model_calls=[], parts=[], calls_used=0)
+    merged["audit"].pop("classification_id_aliases", None)
     cursor, boundaries = 0, []
     for number, part in enumerate(parts, 1):
         prefix = f"part-{number:04d}:"
@@ -62,7 +63,7 @@ def merge_parts(parts):
         merged["audit"]["model_calls"].extend(source["audit"].get("model_calls", []))
         merged["audit"]["calls_used"] += source["audit"].get("calls_used", 0)
         merged["audit"]["parts"].append({"part": number, "pages": source["audit"]["selected_pages"],
-                                            "status": source["status"]})
+            "status": source["status"], "classification_id_aliases": source["audit"].get("classification_id_aliases", [])})
         cursor += sum(len(s["text"]) + 1 for s in source.get("segments", []))
     # Re-extract across joins so quotation marks on opposite sides of a group
     # boundary are paired exactly as they would be for a short document.
@@ -130,16 +131,20 @@ def run_long_pdf_agent(pdf_path, prompt, client, *, total_pages, directory, targ
         pending = [q for q in merged["quotes"] if "relevance" not in q]
         for start in range(0, len(pending), 20):
             batch = pending[start:start + 20]
+            aliases = {f"q{index + 1}": quote for index, quote in enumerate(batch)}
+            merged["audit"].setdefault("joined_classification_id_aliases", []).append(
+                {alias: quote["id"] for alias, quote in aliases.items()})
             call_start = len(client.calls)
             try:
                 if cancelled and cancelled():
                     raise ValueError("Cancelled")
                 payload = {"user_prompt": prompt, "article": merged["article"], "dimensions": dimensions,
-                    "quotes": [{k: q[k] for k in ("id", "text", "source_explicit")} for q in batch]}
-                response = client.generate_json(CLASSIFY_SYSTEM, payload, _class_schema(dimensions), schema_name="classify_joined_quotes")
-                mapping = _validate_classification(response, [q["id"] for q in batch], dimensions)
-                for q in batch:
-                    q["relevance"] = dict(mapping[q["id"]], method="llm_agent", model=_model(client))
+                    "quotes": [dict(id=alias, text=q["text"], source_explicit=q["source_explicit"])
+                               for alias, q in aliases.items()]}
+                response = client.generate_json(CLASSIFY_SYSTEM, payload, _class_schema(dimensions, aliases), schema_name="classify_joined_quotes")
+                mapping = _validate_classification(response, aliases, dimensions)
+                for alias, q in aliases.items():
+                    q["relevance"] = dict(mapping[alias], method="llm_agent", model=_model(client))
                     q["relevance"].pop("id", None)
             except Exception:
                 merged["warnings"].append({"code": "agent_incomplete", "detail": "跨段引文尚未完成模型分类。"})

@@ -78,6 +78,18 @@ class FakeClient:
 
 
 class AgentTests(unittest.TestCase):
+    def test_classification_uses_short_ids_without_changing_occurrence_ids(self):
+        client = FakeClient()
+        result = self.run_agent('正文“肩臂疼痛。”另一次“肩臂疼痛。”', client)
+        request = next(r for r in client.requests if r["stage"] == "classify_quotes")
+        self.assertEqual([q["id"] for q in request["payload"]["quotes"]], ["q1", "q2"])
+        self.assertEqual(request["schema"]["properties"]["results"]["items"]["properties"]["id"]["enum"], ["q1", "q2"])
+        self.assertEqual(result["audit"]["classification_id_aliases"],
+                         [{"q1": result["quotes"][0]["id"], "q2": result["quotes"][1]["id"]}])
+        self.assertTrue(all(q["id"].startswith(result["article"]["id"] + ":q") for q in result["quotes"]))
+        self.assertEqual(len({q["id"] for q in result["quotes"]}), 2)
+        self.assertTrue(all(q["relevance"]["method"] == "llm_agent" for q in result["quotes"]))
+
     def setUp(self):
         self.directory = tempfile.TemporaryDirectory()
         self.addCleanup(self.directory.cleanup)
