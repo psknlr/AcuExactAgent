@@ -5,32 +5,69 @@ import hashlib
 import json
 from pathlib import Path
 import re
-from contextlib import contextmanager
+from contextlib import contextmanager, suppress, ExitStack
 import tempfile
 
 
 @contextmanager
 def open_pdf(path):
-    """Some VeryPDF files expose zero pages to pdfminer; normalize with pypdf once."""
+    """Normalize broken page trees/xrefs in a temporary copy; keep source bytes intact."""
     import pdfplumber
-    document = pdfplumber.open(path)
-    if document.pages:
+    document = None
+    try:
+        document = pdfplumber.open(path)
+        readable = bool(document.pages)
+    except Exception:
+        if document is not None:
+            with suppress(Exception):
+                document.close()
+            if not document.stream_is_external:
+                document.stream.close()
+        document = None
+        readable = False
+    if readable:
         try:
             yield document
         finally:
             document.close()
         return
-    document.close()
-    from pypdf import PdfReader, PdfWriter
-    reader = PdfReader(path)
-    if not reader.pages:
-        raise ValueError("PDF has zero readable pages.")
+    if document is not None:
+        document.close()
     with tempfile.TemporaryDirectory(prefix="acuexact-pdf-") as directory:
         repaired = Path(directory) / "normalized.pdf"
-        writer = PdfWriter()
-        for page in reader.pages:
-            writer.add_page(page)
-        writer.write(repaired)
+        try:
+            from pypdf import PdfReader, PdfWriter
+            reader = PdfReader(path)
+            if not reader.pages:
+                raise ValueError("PDF has zero readable pages.")
+            writer = PdfWriter()
+            with ExitStack() as stack:
+                bounds = None
+                for index, page in enumerate(reader.pages):
+                    try:
+                        box = page.mediabox
+                    except (TypeError, ValueError, AssertionError):
+                        import pypdfium2
+                        from pypdf.generic import RectangleObject
+                        if bounds is None:
+                            bounds = stack.enter_context(pypdfium2.PdfDocument(path))
+                        original = bounds[index]
+                        try:
+                            width, height = original.get_size()
+                        finally:
+                            original.close()
+                        box = RectangleObject([0, 0, width, height])
+                    page.mediabox = box
+                    writer.add_page(page)
+            writer.write(repaired)
+        except Exception:
+            # PDFium can reconstruct malformed xref tables that both pdfminer
+            # and pypdf reject. It is already a pdfplumber runtime dependency.
+            import pypdfium2
+            with pypdfium2.PdfDocument(path) as recovered:
+                if not len(recovered):
+                    raise ValueError("PDF has zero readable pages.")
+                recovered.save(repaired)
         with pdfplumber.open(repaired) as document:
             if not document.pages:
                 raise ValueError("PDF normalization failed; manual review required.")

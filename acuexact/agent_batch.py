@@ -132,11 +132,21 @@ def _run_one(job, settings):
                     if invalid_plan or "results" in value or "missing_quotes" in value:
                         checkpoint.unlink()
         client = CheckpointClient(ProviderConfig(**settings["config"]), directory / "checkpoints")
-        result = run_pdf_agent(job["pdf"], settings["prompt"], client,
-                               target_title=job["title"], max_pages=settings["max_pages"],
-                               max_calls=settings["max_calls"], on_event=event,
-                               transcribe_pages=False,
-                               cancelled=lambda: (Path(settings["out"]) / "STOP").exists())
+        cancelled = lambda: (Path(settings["out"]) / "STOP").exists()
+        if settings.get("long_documents") and "total_pages" not in job:
+            from .pdf import open_pdf
+            with open_pdf(job["pdf"]) as pdf:
+                job = dict(job, total_pages=len(pdf.pages))
+        if settings.get("long_documents") and job.get("total_pages", 0) > 20:
+            from .agent_long import run_long_pdf_agent
+            result = run_long_pdf_agent(job["pdf"], settings["prompt"], client, total_pages=job["total_pages"],
+                directory=directory, target_title=job["title"], max_calls=settings["max_calls"],
+                on_event=event, cancelled=cancelled)
+        else:
+            result = run_pdf_agent(job["pdf"], settings["prompt"], client,
+                                   target_title=job["title"], max_pages=settings["max_pages"],
+                                   max_calls=settings["max_calls"], on_event=event,
+                                   transcribe_pages=False, cancelled=cancelled)
         # Write complete payloads first; status.json is the commit marker for resume.
         write_result(result, directory, source_filename=Path(job.get("member", job["pdf"])).name)
         complete = pipeline_complete(result)
@@ -161,7 +171,7 @@ def _run_one(job, settings):
 
 
 def run_batch(source, out, prompt, config, *, limit=350, start=1, prefix="", workers=6,
-              max_pages=20, max_calls=80):
+              max_pages=20, max_calls=80, long_documents=False):
     if not 1 <= workers <= 32 or limit < 1 or start < 1:
         raise ValueError("workers must be 1–32; limit/start must be positive")
     if "api_key" in config and config["api_key"]:
@@ -174,6 +184,8 @@ def run_batch(source, out, prompt, config, *, limit=350, start=1, prefix="", wor
         raise ValueError("No PDFs match this selection")
     fingerprint = {"source": str(source), "selection": selected, "prompt": prompt, "config": config,
                    "max_pages": max_pages, "max_calls": max_calls}
+    if long_documents:
+        fingerprint["long_documents"] = True
     manifest_path = out / "manifest.json"
     if manifest_path.exists():
         old = json.loads(manifest_path.read_text(encoding="utf-8"))
@@ -203,7 +215,8 @@ def run_batch(source, out, prompt, config, *, limit=350, start=1, prefix="", wor
                 archive.close()
         atomic_json(manifest_path, {"fingerprint": fingerprint, "jobs": jobs})
     (out / "research-prompt.txt").write_text(prompt, encoding="utf-8")
-    settings = dict(out=str(out), prompt=prompt, config=config, max_pages=max_pages, max_calls=max_calls)
+    settings = dict(out=str(out), prompt=prompt, config=config, max_pages=max_pages, max_calls=max_calls,
+                    long_documents=long_documents)
     records = {}
     for job in jobs:
         status = out / job["id"] / "status.json"
@@ -284,6 +297,7 @@ def configure_parser(commands):
     parser.add_argument("--max-tokens", type=int, default=16000)
     parser.add_argument("--max-pages", type=int, default=20)
     parser.add_argument("--max-calls", type=int, default=80)
+    parser.add_argument("--long-documents", action="store_true", help="Read continuous long articles in 10-page groups; max-calls applies per group")
     parser.add_argument("--text-only", action="store_true")
 
 
@@ -293,4 +307,4 @@ def from_args(args):
                           vision=not args.text_only, reasoning_effort=args.reasoning_effort,
                           timeout=args.timeout, max_tokens=args.max_tokens),
                      limit=args.limit, start=args.start, prefix=args.prefix, workers=args.workers,
-                     max_pages=args.max_pages, max_calls=args.max_calls)
+                     max_pages=args.max_pages, max_calls=args.max_calls, long_documents=args.long_documents)
