@@ -99,7 +99,7 @@ def run_long_pdf_agent(pdf_path, prompt, client, *, total_pages, directory, targ
         destination = directory / "parts" / f"part-{number:04d}"
         cached = destination / "result.json"
         pages = list(range(start, min(start + pages_per_part, total_pages + 1)))
-        part = json.loads(cached.read_text()) if cached.exists() else None
+        part = json.loads(cached.read_text(encoding="utf-8")) if cached.exists() else None
         valid_cache = (part and pipeline_complete(part) and part["audit"].get("selected_pages") == pages
             and part["audit"].get("pdf_sha256") == source_digest
             and part["audit"].get("research_prompt") == prompt
@@ -108,7 +108,7 @@ def run_long_pdf_agent(pdf_path, prompt, client, *, total_pages, directory, targ
         if not valid_cache:
             if part and not pipeline_complete(part):
                 for checkpoint in (directory / "checkpoints").glob("*.json"):
-                    value = json.loads(checkpoint.read_text())
+                    value = json.loads(checkpoint.read_text(encoding="utf-8"))
                     if ("regions" in value and not part.get("audit", {}).get("regions")) or "results" in value or "missing_quotes" in value:
                         checkpoint.unlink()
             part = run_pdf_agent(pdf_path, prompt, client, target_title=merged["article"]["title"] if merged else target_title,

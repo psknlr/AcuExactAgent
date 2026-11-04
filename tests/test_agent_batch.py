@@ -58,7 +58,7 @@ class AgentBatchTests(unittest.TestCase):
                 client.generate_json("read", {"page": 2}, schema)
                 self.assertEqual(generated.call_count, 2)
             for file in Path(directory).glob("*.json"):
-                self.assertNotIn("fixture-key", file.read_text())
+                self.assertNotIn("fixture-key", file.read_text(encoding="utf-8"))
 
     def test_stricter_transcript_schema_revalidates_prior_checkpoint(self):
         old = {"type": "object", "properties": {"text": {"type": "string"},
@@ -93,7 +93,7 @@ class AgentBatchTests(unittest.TestCase):
             with patch.object(ModelClient, "_key", return_value="fixture"), patch.object(ModelClient, "generate_json") as remote:
                 self.assertEqual(run_batch(source, output, "extract", config, workers=1), 0)
                 remote.assert_not_called()
-                progress = json.loads((output / "progress.json").read_text())
+                progress = json.loads((output / "progress.json").read_text(encoding="utf-8"))
                 self.assertEqual(progress["pipeline_completed"], 1)
                 self.assertEqual(progress["state"], "finished")
                 for tsv in (output / "quotes.tsv", article / "quotes.tsv"):
@@ -101,9 +101,9 @@ class AgentBatchTests(unittest.TestCase):
                         rows = list(csv.DictReader(stream, delimiter="\t"))
                     self.assertEqual(rows[0]["文件名（中文）"], filename)
                     self.assertEqual(rows[0]["古籍条文"], "原文")
-                result = json.loads((article / "result.json").read_text())
+                result = json.loads((article / "result.json").read_text(encoding="utf-8"))
                 self.assertEqual(result["quotes"][0]["source_pdf_filename"], filename)
-                aggregate = json.loads((output / "results.json").read_text())
+                aggregate = json.loads((output / "results.json").read_text(encoding="utf-8"))
                 self.assertEqual(aggregate["quotes"], result["quotes"])
                 with self.assertRaisesRegex(ValueError, "differs"):
                     run_batch(source, output, "different research", config, workers=1)
@@ -121,6 +121,6 @@ class AgentBatchTests(unittest.TestCase):
             with patch("acuexact.agent.run_pdf_agent", return_value=new):
                 self.assertEqual(_run_one(job, settings)["state"], "done")
             prior = next(article.glob("attempts/*/result.json"))
-            self.assertEqual(json.loads(prior.read_text()), old)
+            self.assertEqual(json.loads(prior.read_text(encoding="utf-8")), old)
             self.assertEqual(new["source_pdf_filename"], "1 中文原名.pdf")
-            self.assertEqual(json.loads((article / "result.json").read_text()), new)
+            self.assertEqual(json.loads((article / "result.json").read_text(encoding="utf-8")), new)
