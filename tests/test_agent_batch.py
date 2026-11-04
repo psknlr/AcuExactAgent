@@ -59,6 +59,20 @@ class AgentBatchTests(unittest.TestCase):
             for file in Path(directory).glob("*.json"):
                 self.assertNotIn("fixture-key", file.read_text())
 
+    def test_stricter_transcript_schema_revalidates_prior_checkpoint(self):
+        old = {"type": "object", "properties": {"text": {"type": "string"},
+               "uncertainties": {"type": "array"}, "confidence": {"type": "number"}}}
+        strict = json.loads(json.dumps(old))
+        strict["properties"]["text"]["minLength"] = 1
+        strict["properties"]["confidence"].update(minimum=0, maximum=1)
+        with tempfile.TemporaryDirectory() as directory:
+            client = CheckpointClient(ProviderConfig("minimax", "MiniMax-M3.1-Flash"), directory)
+            with patch.object(ModelClient, "generate_json", return_value={"text": "原文", "uncertainties": [], "confidence": .9}) as generated:
+                client.generate_json("read", {}, old)
+                client.generate_json("read", {}, strict)
+                self.assertEqual(generated.call_count, 1)
+                self.assertEqual(client.calls[-1]["status"], "cache_hit")
+
     def test_resume_skips_completed_paper_and_refuses_changed_prompt(self):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory).resolve()

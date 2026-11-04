@@ -12,6 +12,8 @@ import shutil
 import time
 import zipfile
 
+from jsonschema.exceptions import ValidationError
+
 from .export import to_tsv, write_result
 from .providers import ModelClient, ProviderConfig, _check_schema
 
@@ -41,14 +43,29 @@ class CheckpointClient(ModelClient):
                      "provider": self.config.provider, "model": self.config.model,
                      "base_url": self.base_url, "max_tokens": self.config.max_tokens,
                      "reasoning_effort": self.config.reasoning_effort}
-        digest = hashlib.sha256(json.dumps(signature, sort_keys=True, ensure_ascii=False).encode()).hexdigest()
-        path = self.directory / (digest + ".json")
-        if path.exists():
-            result = json.loads(path.read_text(encoding="utf-8"))
-            _check_schema(schema).validate(result)
-            self.calls.append({"provider": self.config.provider, "model": self.config.model,
-                               "status": "cache_hit", "usage": {}, "request_id": None})
-            return result
+        def cache_path(value):
+            digest = hashlib.sha256(json.dumps(value, sort_keys=True, ensure_ascii=False).encode()).hexdigest()
+            return self.directory / (digest + ".json")
+        path = cache_path(signature)
+        # Revalidate older transcript checkpoints when only constraints became
+        # stricter, rather than charging again for the same successful reading.
+        candidates = [path]
+        if "text" in schema.get("properties", {}) and "uncertainties" in schema["properties"]:
+            legacy = json.loads(json.dumps(schema))
+            legacy["properties"]["text"].pop("minLength", None)
+            for key in ("minimum", "maximum"):
+                legacy["properties"].get("confidence", {}).pop(key, None)
+            candidates.append(cache_path(dict(signature, schema=legacy)))
+        for cached in dict.fromkeys(candidates):
+            if cached.exists():
+                try:
+                    result = json.loads(cached.read_text(encoding="utf-8"))
+                    _check_schema(schema).validate(result)
+                except (ValueError, ValidationError):
+                    continue
+                self.calls.append({"provider": self.config.provider, "model": self.config.model,
+                                   "status": "cache_hit", "usage": {}, "request_id": None})
+                return result
         result = super().generate_json(system, payload, schema, images=images, schema_name=schema_name)
         atomic_json(path, result)
         return result
