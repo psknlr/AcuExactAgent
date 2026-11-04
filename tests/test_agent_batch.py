@@ -1,4 +1,5 @@
 import tempfile
+import csv
 import json
 from pathlib import Path
 import unittest
@@ -78,22 +79,32 @@ class AgentBatchTests(unittest.TestCase):
             root = Path(directory).resolve()
             source, output = root / "papers", root / "results"
             source.mkdir(); output.mkdir()
-            (source / "1 paper.pdf").write_bytes(b"fixture")
+            filename = "1 原始中文文件名.pdf"
+            (source / filename).write_bytes(b"fixture")
             config = {"provider": "minimax", "model": "MiniMax-M3.1-Flash"}
-            job = {"id": "article-1", "index": 1, "member": "1 paper.pdf", "title": "paper",
-                   "pdf": str(source / "1 paper.pdf")}
+            job = {"id": "article-1", "index": 1, "member": filename, "title": "不同的文章标题",
+                   "pdf": str(output / "inputs/article-0001-hash.pdf")}
             fingerprint = {"source": str(source), "selection": select_jobs(source, 350),
                            "prompt": "extract", "config": config, "max_pages": 20, "max_calls": 80}
             (output / "manifest.json").write_text(json.dumps({"fingerprint": fingerprint, "jobs": [job]}))
             article = output / job["id"]; article.mkdir()
             (article / "status.json").write_text(json.dumps(dict(job, state="done", pipeline_complete=True)))
-            (article / "result.json").write_text(json.dumps({"quotes": []}))
+            (article / "result.json").write_text(json.dumps({"quotes": [{"id": "q1", "text": "原文"}]}))
             with patch.object(ModelClient, "_key", return_value="fixture"), patch.object(ModelClient, "generate_json") as remote:
                 self.assertEqual(run_batch(source, output, "extract", config, workers=1), 0)
                 remote.assert_not_called()
                 progress = json.loads((output / "progress.json").read_text())
                 self.assertEqual(progress["pipeline_completed"], 1)
                 self.assertEqual(progress["state"], "finished")
+                for tsv in (output / "quotes.tsv", article / "quotes.tsv"):
+                    with tsv.open(encoding="utf-8-sig", newline="") as stream:
+                        rows = list(csv.DictReader(stream, delimiter="\t"))
+                    self.assertEqual(rows[0]["文件名（中文）"], filename)
+                    self.assertEqual(rows[0]["古籍条文"], "原文")
+                result = json.loads((article / "result.json").read_text())
+                self.assertEqual(result["quotes"][0]["source_pdf_filename"], filename)
+                aggregate = json.loads((output / "results.json").read_text())
+                self.assertEqual(aggregate["quotes"], result["quotes"])
                 with self.assertRaisesRegex(ValueError, "differs"):
                     run_batch(source, output, "different research", config, workers=1)
 
@@ -103,7 +114,7 @@ class AgentBatchTests(unittest.TestCase):
             article = root / "article-1"; article.mkdir()
             old = {"status": "needs_review", "quotes": [{"text": "先前的原文证据"}], "audit": {}}
             (article / "result.json").write_text(json.dumps(old))
-            job = {"id": "article-1", "title": "paper", "pdf": "fixture.pdf"}
+            job = {"id": "article-1", "title": "paper", "pdf": "fixture.pdf", "member": "folder/1 中文原名.pdf"}
             settings = {"out": directory, "prompt": "extract", "max_pages": 20, "max_calls": 80,
                         "config": {"provider": "minimax", "model": "MiniMax-M3.1-Flash"}}
             new = {"status": "needs_review", "quotes": [], "warnings": [], "audit": {"stages": ["review_quotes"]}}
@@ -111,4 +122,5 @@ class AgentBatchTests(unittest.TestCase):
                 self.assertEqual(_run_one(job, settings)["state"], "done")
             prior = next(article.glob("attempts/*/result.json"))
             self.assertEqual(json.loads(prior.read_text()), old)
+            self.assertEqual(new["source_pdf_filename"], "1 中文原名.pdf")
             self.assertEqual(json.loads((article / "result.json").read_text()), new)

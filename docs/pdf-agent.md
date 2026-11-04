@@ -82,6 +82,7 @@ python -m acuexact agent-batch --source papers.zip --limit 350 --workers 8 --pro
 - `--start 1` 指定自然排序后的起点；`--prefix "CNKI 1_1187_paper_original/"` 限定文件夹。文件名去掉开头编号作为目标标题，去掉末尾独立数字的下载重名后缀；标题匹配仅规范常见繁简异体、全半角及“针剌/针刺”等书目写法；正文从不应用这些替换。标题不匹配会保留 `needs_scope`，不会自动混入其他文章。
 - 独立进程并行，避免 PDF 渲染库跨线程冲突。批量模式直接用页面图像规划，然后只转录选定文章区域，省去重复的整页转录；使用高细节图片输入。并发可用 `--workers` 调整；请求预算、超时和页数限制均逐篇生效。
 - 每篇立即保存到 `article-*/result.json`、`quotes.tsv`、`status.json`、`events.jsonl`。根目录的 `quotes.tsv`、`results.json`、`progress.json` 在每篇结束时原子更新；`manifest.json` 固定文件选择和运行配置。
+- TSV 的“文件名（中文）”列保留来源 PDF 的原始文件名（含编号和 `.pdf` 后缀），与 JSON 的 `source_pdf_filename` 对应；使用 ZIP 内的文件名，不使用内部暂存编号或推断的文章标题。续跑旧批次时会补齐这一列，无需重新调用模型。
 - 同一命令再次运行，会跳过完整结束的文章，重跑未完成项；每篇 `checkpoints/` 保存通过 JSON/schema 校验的阶段结果，复用相同证据的转录。重跑前的 JSON/TSV 另存到 `attempts/`，保留既有证据。语义校验失败的规划和分类不会永久缓存重放。检查点含文献转录文字，仅保存在本地。来源、prompt、模型或配置变化时必须使用新输出目录。密钥只从供应商环境变量读取，不保存到清单或结果。
 - 在输出目录创建名为 `STOP` 的文件，停止派发任务并在下次模型调用前取消进行中任务。恢复前删除 `STOP`，重新运行原命令。
 - `pipeline_complete=true` 表示提取、查漏和分类流程结束；自动边界与视觉证据仍标为 `needs_review`。`needs_attention` 表示流程未完成，需要检查对应告警；不能把失败当作零引文。处理结束有未完成项时返回非零退出码。

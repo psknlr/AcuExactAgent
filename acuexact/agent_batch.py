@@ -138,7 +138,7 @@ def _run_one(job, settings):
                                transcribe_pages=False,
                                cancelled=lambda: (Path(settings["out"]) / "STOP").exists())
         # Write complete payloads first; status.json is the commit marker for resume.
-        write_result(result, directory)
+        write_result(result, directory, source_filename=Path(job.get("member", job["pdf"])).name)
         complete = pipeline_complete(result)
         calls = result.get("audit", {}).get("model_calls", [])
         record = dict(job, state="done" if complete else "needs_attention",
@@ -219,7 +219,12 @@ def run_batch(source, out, prompt, config, *, limit=350, start=1, prefix="", wor
             if job["id"] in records:
                 result_path = out / job["id"] / "result.json"
                 if result_path.exists():
-                    quotes.extend(json.loads(result_path.read_text(encoding="utf-8"))["quotes"])
+                    result = json.loads(result_path.read_text(encoding="utf-8"))
+                    filename = Path(job["member"]).name
+                    # Backfill original names for completed jobs from older runs.
+                    if result.get("source_pdf_filename") != filename:
+                        write_result(result, result_path.parent, source_filename=filename)
+                    quotes.extend(result["quotes"])
         temporary = out / "quotes.tsv.tmp"
         temporary.write_text(to_tsv(quotes), encoding="utf-8-sig")
         os.replace(temporary, out / "quotes.tsv")
