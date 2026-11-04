@@ -32,7 +32,7 @@ python -m acuexact demo --out outputs/demo
 python -m acuexact serve --port 8765
 ```
 
-浏览器打开 **http://127.0.0.1:8765**。导入 PDF、填写任务 prompt、选择供应商和模型、输入 API Key 后点击运行。扫描件启用视觉模型；MiniMax 文字模型可搭配独立 GPT/Claude 视觉配置。含多篇文章时填写 EndNote 对应标题。结果可筛选、核对原页与矩形证据、复制到 Excel、下载 TSV / JSON。
+浏览器打开 **http://127.0.0.1:8765**。导入 PDF、填写任务 prompt、选择供应商和模型、输入 API Key 后点击运行。扫描件启用视觉模型；MiniMax-M3.1-Flash 可直接读图，也可作为独立视觉模型。含多篇文章时填写 EndNote 对应标题。结果可筛选、核对原页与矩形证据、复制到 Excel、下载 TSV / JSON。
 
 “离线合成样例”无需密钥，包含病名排除、弱相关短词保留、缺失出处、重复及跨页引文、同页邻文隔离。它使用虚构《演示医籍》，不会冒充真实 API 结果。详见 [PDF 智能体与 API 接入](docs/pdf-agent.md)。
 
@@ -138,7 +138,15 @@ python -m acuexact lookup --input outputs/paper/result.json --out outputs/looked
 
 分类模型接收引文，使用结构化 JSON 输出，不拥有改变引文或补出处的权限。`lookup`（或 `extract --lookup`）向中文维基文库发送缺出处引文的查询，每条最多 3 次请求，取得正文后才做去空白的全文精确比对；不是只信搜索摘要。候选书篇由页面标题解析，仍需核对版本和章节。网络失败、简繁/标点差异或覆盖不足时保留待查，不伪造结论。
 
-核证资料可保存为本地 catalog，使用 `extract --catalog catalog.json`。核证字段要求见 [架构与数据约定](docs/architecture.md)。本地演示不自动调用模型或外网。当前未用 API 密钥进行真实模型效果测试。
+核证资料可保存为本地 catalog，使用 `extract --catalog catalog.json`。核证字段要求见 [架构与数据约定](docs/architecture.md)。本地演示不自动调用模型或外网。已用中国内地 MiniMax-M3.1-Flash 跑通真实 PDF 视觉流程，尚无人工 gold 准确率评测。
+
+## 并行处理 PDF / ZIP
+
+```bash
+python -m acuexact agent-batch --source papers.zip --limit 350 --workers 8 --prompt-file examples/research-prompt.txt --out outputs/minimax_350
+```
+
+默认使用 `MINIMAX_API_KEY`、中国内地接口和支持视觉的 `MiniMax-M3.1-Flash`。结果逐篇落盘，根目录实时汇总 TSV/JSON；原命令可断点续跑。文件选择、进度、停止与复核要求见 [PDF 智能体使用说明](docs/pdf-agent.md#minimax-m31-flash-视觉与批处理)。
 
 ## 人工金标准评测
 

@@ -67,7 +67,8 @@ class ProviderTests(unittest.TestCase):
         options = provider_options()
         self.assertEqual({o["id"] for o in options}, {"openai", "anthropic", "minimax", "openai_compatible"})
         minimax = next(o for o in options if o["id"] == "minimax")
-        self.assertFalse(minimax["vision"])
+        self.assertTrue(minimax["vision"])
+        self.assertEqual(minimax["default_model"], "MiniMax-M3.1-Flash")
         self.assertEqual(minimax["structured_output"], "prompt_and_local_validation")
         options[0]["model"] = "changed"
         self.assertNotEqual(provider_options()[0]["model"], "changed")
@@ -114,12 +115,43 @@ class ProviderTests(unittest.TestCase):
         self.assertEqual(request.full_url, "https://api.minimax.cn/v1/chat/completions")
         self.assertNotIn("response_format", body)
         self.assertIn("JSON Schema", body["messages"][0]["content"])
-        self.assertEqual(body["max_tokens"], 8000)
+        self.assertEqual(body["max_completion_tokens"], 8000)
         serialized = json.dumps(client.calls)
         self.assertNotIn(KEY, serialized)
         self.assertNotIn("private-document", serialized)
         self.assertNotIn("private reasoning", serialized)
         self.assertNotIn("private_field", serialized)
+
+    def test_minimax_flash_vision_and_separate_reasoning(self):
+        client = ModelClient(ProviderConfig("minimax", "MiniMax-M3.1-Flash", KEY,
+                                           vision=True, reasoning_effort="low"))
+        response = completion()
+        response["choices"][0]["message"]["reasoning_content"] = "private reasoning"
+        request, body = self.run_result(client, response, images=[PNG])
+        self.assertEqual(request.full_url, "https://api.minimax.cn/v1/chat/completions")
+        self.assertEqual(body["messages"][1]["content"][1]["image_url"]["url"], PNG)
+        self.assertEqual(body["messages"][1]["content"][1]["image_url"]["detail"], "high")
+        self.assertEqual(body["reasoning_effort"], "low")
+        self.assertEqual(body["max_completion_tokens"], 8000)
+        self.assertNotIn("max_tokens", body)
+        self.assertNotIn("private reasoning", json.dumps(client.calls))
+
+    def test_minimax_text_only_model_cannot_enable_vision(self):
+        with self.assertRaisesRegex(ProviderError, "M2"):
+            ModelClient(ProviderConfig("minimax", "MiniMax-M2.5", KEY, vision=True))
+
+    def test_minimax_business_error_rejected_with_http_200(self):
+        client = self.client("minimax")
+        with patch.object(client._opener, "open", return_value=FakeResponse(
+                completion(base_resp={"status_code": 1008, "status_msg": KEY}))):
+            with self.assertRaisesRegex(ProviderError, "业务错误") as caught:
+                client.generate_json("x", {}, SCHEMA)
+        self.assertNotIn(KEY, str(caught.exception))
+
+    def test_reasoning_effort_rejects_disabled_and_invalid_types(self):
+        for effort in ("none", "disabled", [], None):
+            with self.subTest(effort=effort), self.assertRaises(ProviderError):
+                ModelClient(ProviderConfig("minimax", "MiniMax-M3.1-Flash", KEY, reasoning_effort=effort))
 
     def test_minimax_china_endpoint(self):
         for host in ("api.minimax.cn", "api.minimaxi.com", "api.minimax.io"):
@@ -308,7 +340,7 @@ class ProviderTests(unittest.TestCase):
             self.assertNotIn(KEY, str(caught.exception))
 
     def test_images_rejected_preflight(self):
-        for config, images in ((ProviderConfig("minimax", "MiniMax-M2.5", KEY, vision=True), [PNG]), (ProviderConfig("openai", "gpt-4.1", KEY), [PNG]), (ProviderConfig("openai", "gpt-4.1", KEY, vision=True), ["https://example.com/image.png"]), (ProviderConfig("openai", "gpt-4.1", KEY, vision=True), ["data:image/png;base64,AAAA"]), (ProviderConfig("openai", "gpt-4.1", KEY, vision=True), ["data:image/png;base64,invalid="])):
+        for config, images in ((ProviderConfig("minimax", "MiniMax-M3.1-Flash", KEY), [PNG]), (ProviderConfig("openai", "gpt-4.1", KEY), [PNG]), (ProviderConfig("openai", "gpt-4.1", KEY, vision=True), ["https://example.com/image.png"]), (ProviderConfig("openai", "gpt-4.1", KEY, vision=True), ["data:image/png;base64,AAAA"]), (ProviderConfig("openai", "gpt-4.1", KEY, vision=True), ["data:image/png;base64,invalid="])):
             client = ModelClient(config)
             with patch.object(client._opener, "open") as mocked, self.assertRaises(ProviderError):
                 client.generate_json("x", {}, SCHEMA, images=images)
