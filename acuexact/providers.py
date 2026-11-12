@@ -28,7 +28,7 @@ from referencing.exceptions import Unresolvable
 _PROVIDERS = {
     "openai": {"label": "OpenAI / GPT", "base_url": "https://api.openai.com/v1", "model": "gpt-4.1", "env": "OPENAI_API_KEY", "vision": True, "structured_output": "native_json_schema"},
     "anthropic": {"label": "Anthropic / Claude", "base_url": "https://api.anthropic.com/v1", "model": "claude-sonnet-4-6", "env": "ANTHROPIC_API_KEY", "vision": True, "structured_output": "native_json_schema"},
-    "minimax": {"label": "MiniMax（国内 / 国际）", "base_url": "https://api.minimax.cn/v1", "model": "MiniMax-M2.5", "env": "MINIMAX_API_KEY", "vision": False, "structured_output": "prompt_and_local_validation",
+    "minimax": {"label": "MiniMax（国内 / 国际）", "base_url": "https://api.minimax.cn/v1", "model": "MiniMax-M3.1-Flash", "env": "MINIMAX_API_KEY", "vision": True, "structured_output": "prompt_and_local_validation",
                 "endpoint_presets": [
                     {"id": "cn", "label": "国内站 · api.minimax.cn", "base_url": "https://api.minimax.cn/v1"},
                     {"id": "cn_legacy", "label": "国内原域名 · api.minimaxi.com", "base_url": "https://api.minimaxi.com/v1"},
@@ -42,6 +42,10 @@ _IMAGE_RE = re.compile(r"^data:(image/(?:png|jpeg|webp|gif));base64,([A-Za-z0-9+
 
 class ProviderError(ValueError):
     """User-safe error: does not contain response bodies, prompts, or credentials."""
+
+
+class ProviderRefusal(ProviderError):
+    """A refusal must remain distinguishable from a truncated response."""
 
 
 def provider_options() -> list[dict]:
@@ -58,6 +62,7 @@ class ProviderConfig:
     timeout: float = 60
     max_tokens: int = 8000
     vision: bool = False
+    reasoning_effort: str = "medium"
 
 
 class _NoRedirect(HTTPRedirectHandler):
@@ -146,6 +151,10 @@ class ModelClient:
             raise ProviderError("max_tokens 必须为 1–128000 的整数。")
         if not isinstance(config.api_key, str) or not isinstance(config.vision, bool):
             raise ProviderError("API 配置类型无效。")
+        if config.reasoning_effort not in ("low", "medium", "high", "xhigh", "max"):
+            raise ProviderError("reasoning_effort 必须为 low、medium、high、xhigh 或 max。")
+        if config.provider == "minimax" and config.vision and not config.model.startswith("MiniMax-M3"):
+            raise ProviderError("MiniMax 图片输入请使用 MiniMax-M3.1-Flash 或 MiniMax-M3；M2 系列仅支持文字。")
         self.config = config
         try:
             self.base_url = (config.base_url or _PROVIDERS[config.provider]["base_url"]).rstrip("/")
@@ -179,8 +188,8 @@ class ModelClient:
             return []
         if not isinstance(images, list) or len(images) > 20:
             raise ProviderError("图片必须为列表，每次最多 20 张。")
-        if images and (not self.config.vision or self.config.provider == "minimax"):
-            raise ProviderError("当前配置未启用图像能力；MiniMax 文字适配器需先对扫描 PDF 进行 OCR。")
+        if images and not self.config.vision:
+            raise ProviderError("当前配置未启用图像能力；请启用支持图片输入的模型。")
         result = []
         for value in images:
             match = _IMAGE_RE.fullmatch(value) if isinstance(value, str) else None
@@ -263,6 +272,8 @@ class ModelClient:
         try:
             if response.get("error"):
                 raise ProviderError("模型 API 返回错误状态。")
+            if provider == "minimax" and response.get("base_resp", {}).get("status_code", 0) != 0:
+                raise ProviderError("MiniMax API 返回业务错误；请检查模型权限、额度及请求配置。")
             if provider == "openai":
                 if response.get("status") != "completed":
                     raise ProviderError("模型输出未完成或已截断；请减少输入或增加输出上限。")
@@ -272,21 +283,21 @@ class ModelClient:
                         continue
                     for block in item.get("content", []):
                         if block.get("type") == "refusal":
-                            raise ProviderError("模型拒绝了该请求。")
+                            raise ProviderRefusal("模型拒绝了该请求。")
                         if block.get("type") == "output_text":
                             parts.append(block["text"])
                 text = "".join(parts)
             elif provider == "anthropic":
                 reason = response.get("stop_reason")
                 if reason == "refusal":
-                    raise ProviderError("模型拒绝了该请求。")
+                    raise ProviderRefusal("模型拒绝了该请求。")
                 if reason != "end_turn":
                     raise ProviderError("模型输出未完成或已截断；请减少输入或增加输出上限。")
                 text = "".join(block["text"] for block in response.get("content", []) if block.get("type") == "text")
             else:
                 choice = response["choices"][0]
                 if choice["message"].get("refusal") or choice.get("finish_reason") == "content_filter":
-                    raise ProviderError("模型拒绝了该请求。")
+                    raise ProviderRefusal("模型拒绝了该请求。")
                 if choice.get("finish_reason") != "stop":
                     raise ProviderError("模型输出未完成或已截断；请减少输入或增加输出上限。")
                 text = choice["message"]["content"]
@@ -333,12 +344,19 @@ class ModelClient:
                 if image_parts:
                     content = [{"type": "text", "text": user_text}] + [{"type": "image_url", "image_url": {"url": value}} for value, _, _ in image_parts]
                 body = {"model": self.config.model, "messages": [{"role": "system", "content": active_instructions}, {"role": "user", "content": content}], "max_tokens": self.config.max_tokens, "stream": False}
+                if provider == "minimax":
+                    if image_parts:
+                        for part in content[1:]:
+                            part["image_url"]["detail"] = "high"
+                    body["max_completion_tokens"] = body.pop("max_tokens")
+                    if self.config.model.startswith("MiniMax-M3.1"):
+                        body["reasoning_effort"] = self.config.reasoning_effort
                 path = "/chat/completions"
             response = self._request(path, body, key, bool(generation))
             try:
                 text = self._text(response).strip()
-            except ProviderError:
-                self.calls[-1]["status"] = "rejected"
+            except ProviderError as exc:
+                self.calls[-1]["status"] = "refused" if isinstance(exc, ProviderRefusal) else "rejected"
                 raise
             if repairable:
                 text = re.sub(r"^<think>.*?</think>\s*", "", text, count=1, flags=re.DOTALL)

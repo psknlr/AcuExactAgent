@@ -3,6 +3,20 @@ from acuexact.extraction import extract_quotes
 from acuexact.pdf import text_quality_flags
 
 
+class LegacyPunctuationQualityTests(unittest.TestCase):
+    def test_printable_legacy_punctuation_mapping_requires_visual_reading(self):
+        text = '经络%瘀滞*疼痛#肩臂!不举@气血' * 10
+        self.assertIn('suspicious_punctuation_mapping', text_quality_flags(text))
+
+    def test_clinical_percentages_and_normal_punctuation_remain_clear(self):
+        text = '观察组30例，有效率95%，对照组有效率80%；P<0.05。' * 10
+        self.assertNotIn('suspicious_punctuation_mapping', text_quality_flags(text))
+
+    def test_printable_book_and_quote_delimiters_are_not_treated_as_clear_text(self):
+        text = ('正常中医文献正文。' * 10) + '根据5内经6:/ 虚则补之,寒则留之0。'
+        self.assertIn('mapped_quote_delimiters', text_quality_flags(text))
+
+
 def run(text, segments=None):
     return extract_quotes(segments or [{"text": text, "page": 1}], {"id": "a", "title": "target"})
 
@@ -31,6 +45,13 @@ class ExtractionTests(unittest.TestCase):
     def test_attribution_can_cross_layout_newline(self):
         r = run('《素问·痹论》曰：\n“风寒湿三气杂至。”')
         self.assertEqual(r["quotes"][0]["source_explicit"]["chapter"], "痹论")
+
+    def test_book_and_chapter_layout_wraps_do_not_change_the_raw_source_evidence(self):
+        r = run('《临证指\n南·肩痛\n篇》曰：“原文。”')
+        source = r["quotes"][0]["source_explicit"]
+        self.assertEqual(source["book"], "临证指南")
+        self.assertEqual(source["chapter"], "肩痛篇")
+        self.assertEqual(source["evidence"], '《临证指\n南·肩痛\n篇》曰：')
 
     def test_valid_quote_after_unclosed_quote_is_recovered_for_review(self):
         r = run('前文“残缺。后文曰：“完整古文。”')

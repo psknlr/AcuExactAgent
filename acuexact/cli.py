@@ -13,6 +13,8 @@ def main(argv=None):
             stream.reconfigure(encoding="utf-8")
     parser = argparse.ArgumentParser(description="AcuExactAgent | 先圈定文章，再逐字提取；出处与查证分列。")
     commands = parser.add_subparsers(dest="command", required=True)
+    from .agent_batch import configure_parser
+    configure_parser(commands)
     demo = commands.add_parser("demo", help="Run synthetic offline regression demo")
     demo.add_argument("--out", default="outputs/demo")
     server = commands.add_parser("serve", help="Start local browser demo")
@@ -28,7 +30,7 @@ def main(argv=None):
     agent.add_argument("--base-url", default="")
     agent.add_argument("--api-key-env", help="Name of environment variable; never put a key in command history")
     agent.add_argument("--vision", action="store_true")
-    agent.add_argument("--vision-provider", choices=["openai", "anthropic", "openai_compatible"])
+    agent.add_argument("--vision-provider", choices=["openai", "anthropic", "minimax", "openai_compatible"])
     agent.add_argument("--vision-model")
     agent.add_argument("--vision-base-url", default="")
     agent.add_argument("--vision-key-env")
@@ -37,6 +39,8 @@ def main(argv=None):
     agent.add_argument("--max-pages", type=int, default=30)
     agent.add_argument("--max-calls", type=int, default=80)
     agent.add_argument("--timeout", type=float, default=60)
+    agent.add_argument("--max-tokens", type=int, default=16000)
+    agent.add_argument("--reasoning-effort", choices=["low", "medium", "high", "xhigh", "max"], default="medium")
     agent.add_argument("--out", default="outputs/agent")
     inv = commands.add_parser("inventory")
     inv.add_argument("--zip", required=True); inv.add_argument("--out", required=True)
@@ -70,7 +74,10 @@ def main(argv=None):
     lookup.add_argument("--input", required=True); lookup.add_argument("--out", required=True)
     args = parser.parse_args(argv)
     try:
-        if args.command == "demo":
+        if args.command == "agent-batch":
+            from .agent_batch import from_args
+            return from_args(args)
+        elif args.command == "demo":
             from .pipeline import demo as run_demo
             result = run_demo()
             write_result(result, args.out)
@@ -91,8 +98,8 @@ def main(argv=None):
                 if variable and not os.environ.get(variable):
                     raise ValueError(f"Environment variable {variable} is not set")
                 return os.environ.get(variable, "") if variable else ""
-            client = ModelClient(ProviderConfig(args.provider, args.model or defaults[args.provider], key(args.api_key_env), args.base_url, args.timeout, vision=args.vision))
-            vision_client = ModelClient(ProviderConfig(args.vision_provider, args.vision_model or defaults[args.vision_provider], key(args.vision_key_env), args.vision_base_url, args.timeout, vision=True)) if args.vision_provider else None
+            client = ModelClient(ProviderConfig(args.provider, args.model or defaults[args.provider], key(args.api_key_env), args.base_url, args.timeout, max_tokens=args.max_tokens, vision=args.vision, reasoning_effort=args.reasoning_effort))
+            vision_client = ModelClient(ProviderConfig(args.vision_provider, args.vision_model or defaults[args.vision_provider], key(args.vision_key_env), args.vision_base_url, args.timeout, max_tokens=args.max_tokens, vision=True, reasoning_effort=args.reasoning_effort)) if args.vision_provider else None
             client._key()
             if vision_client:
                 vision_client._key()

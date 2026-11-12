@@ -29,7 +29,7 @@ def explicit_source(text: str, start: int, end: int) -> dict:
     if not match:
         return empty
     title = match.group(1).strip()
-    parts = re.split(r"[·•‧・]", title, maxsplit=1)
+    parts = [normalize_layout(part) for part in re.split(r"[·•‧・]", title, maxsplit=1)]
     return {"book": parts[0], "chapter": parts[1] if len(parts) > 1 else None,
             "evidence": match.group(0).strip()}
 

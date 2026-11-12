@@ -1,6 +1,7 @@
 import tempfile
 import unittest
 from pathlib import Path
+from unittest.mock import patch
 from pypdf import PdfWriter
 from pypdf.generic import DictionaryObject, NameObject, DecodedStreamObject
 from acuexact.pdf import read_regions, file_sha256, open_pdf
@@ -18,6 +19,42 @@ def fixture(path):
 
 
 class PdfScopeTests(unittest.TestCase):
+    def test_missing_media_box_uses_the_renderers_bounds(self):
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "no-box.pdf"
+            writer = PdfWriter()
+            page = writer.add_blank_page(width=600, height=800)
+            del page["/MediaBox"]
+            writer.write(path)
+            digest = file_sha256(path)
+            with open_pdf(path) as document:
+                self.assertEqual(len(document.pages), 1)
+                self.assertEqual((document.pages[0].width, document.pages[0].height), (612, 792))
+            self.assertEqual(file_sha256(path), digest)
+
+    def test_pdfium_recovery_preserves_source_bytes_and_text(self):
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "broken.pdf"
+            fixture(path)
+            digest = file_sha256(path)
+            import pdfplumber
+            original_open = pdfplumber.open
+            calls = 0
+
+            def initially_broken(*args, **kwargs):
+                nonlocal calls
+                calls += 1
+                if calls == 1:
+                    raise ValueError("Malformed xref")
+                return original_open(*args, **kwargs)
+
+            with patch("pdfplumber.open", side_effect=initially_broken), patch("pypdf.PdfReader", side_effect=ValueError("Malformed xref")):
+                with open_pdf(path) as document:
+                    self.assertEqual(len(document.pages), 1)
+                    self.assertIn("TARGET_ARTICLE_TEXT", document.pages[0].extract_text())
+                    self.assertEqual((document.pages[0].width, document.pages[0].height), (600, 800))
+            self.assertEqual(file_sha256(path), digest)
+
     def test_approved_region_excludes_neighbour_same_page(self):
         with tempfile.TemporaryDirectory() as directory:
             path = Path(directory) / "two.pdf"
