@@ -86,6 +86,26 @@ class ProviderTests(unittest.TestCase):
         self.assertEqual(client.calls[-1]["usage"], {"input_tokens": 12, "output_tokens": 5})
         self.assertEqual(client.calls[-1]["status"], "completed")
 
+    def test_requested_gpt4o_mini_model_and_output_cap_reach_the_wire(self):
+        client = ModelClient(ProviderConfig("openai", "gpt-4o-mini", api_key=KEY, vision=True, max_tokens=16000))
+        request, body = self.run_result(client, responses(), images=[PNG])
+        self.assertEqual(body["model"], "gpt-4o-mini")
+        self.assertEqual(body["max_output_tokens"], 16000)
+        self.assertNotIn("reasoning_effort", body)
+        self.assertNotIn("max_completion_tokens", body)
+        self.assertEqual(client.calls[-1]["model"], "gpt-4o-mini")
+
+    def test_refusal_metadata_is_distinct_from_truncation_for_resumable_jobs(self):
+        for wire, expected in [(responses(status="incomplete"), "rejected"),
+                (responses(output=[{"type": "message", "content": [{"type": "refusal", "refusal": KEY}]}]), "refused")]:
+            client = self.client()
+            with patch.object(client._opener, "open", return_value=FakeResponse(wire)) as mocked:
+                with self.assertRaises(ProviderError):
+                    client.generate_json("x", {}, SCHEMA)
+            self.assertEqual(mocked.call_count, 1)
+            self.assertEqual(client.calls[-1]["status"], expected)
+            self.assertNotIn(KEY, json.dumps(client.calls))
+
     def test_claude_native_schema_and_image(self):
         request, body = self.run_result(self.client("anthropic", vision=True), messages(), images=[PNG])
         self.assertEqual(request.full_url, "https://api.anthropic.com/v1/messages")

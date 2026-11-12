@@ -39,6 +39,12 @@ GPT 同时负责文字与视觉：
 python -m acuexact agent --pdf paper.pdf --provider openai --model gpt-4.1 --vision --prompt-file examples/research-prompt.txt --out outputs/gpt
 ```
 
+也可明确指定 `gpt-4o-mini`，使用 `OPENAI_API_KEY` 和官方 Responses 接口。该模型上下文为 128,000 token，单次输出上限 16,384 token；高精度图片的 token 用量较高。批处理中启用 `--long-documents` 时，`gpt-4o-mini` 超过两页的 PDF 按两页分段，继续核对文章边界、原始页码和跨段引文。图片保持 `detail=high`，不通过降低读图质量来容纳更多页。账户权限与模型实际可用性仍须用真实请求验证。[模型规格](https://developers.openai.com/api/docs/models/gpt-4o-mini)、[图片输入](https://developers.openai.com/api/docs/guides/images-vision)。
+
+```bash
+python -m acuexact agent-batch --source papers.zip --limit 1 --workers 1 --provider openai --model gpt-4o-mini --max-tokens 16000 --long-documents --prompt-file examples/research-prompt.txt --out outputs/gpt4o_mini
+```
+
 自定义网关使用 `--provider openai_compatible --base-url https://YOUR_HOST/v1 --model MODEL --api-key-env CUSTOM_API_KEY`；它不会继承 `OPENAI_API_KEY`。不要把 API Key 作为 CLI 参数或写进 prompt。Linux/macOS 使用 `export MINIMAX_API_KEY='YOUR_KEY'`。Docker 可用 `--env-file` 加载本地环境文件，或在浏览器表单输入 Key；不要把环境文件提交 Git。
 
 ## 执行与质量约束
@@ -80,12 +86,13 @@ python -m acuexact agent-batch --source papers.zip --limit 350 --workers 8 --pro
 ```
 
 - `--start 1` 指定自然排序后的起点；`--prefix "CNKI 1_1187_paper_original/"` 限定文件夹。文件名去掉开头编号作为目标标题，去掉末尾独立数字的下载重名后缀；标题匹配仅规范常见繁简异体、全半角及“针剌/针刺”等书目写法；正文从不应用这些替换。标题不匹配会保留 `needs_scope`，不会自动混入其他文章。
-- 独立进程并行，避免 PDF 渲染库跨线程冲突。批量模式直接用页面图像规划，然后只转录选定文章区域，省去重复的整页转录；使用高细节图片输入。并发可用 `--workers` 调整；请求预算、超时和页数限制均逐篇生效。
+- 独立进程并行，避免 PDF 渲染库跨线程冲突。批量模式直接用页面图像规划，选区文字层清晰时直接保留其原文，损坏或不足时才转录选定区域；短篇和长篇均省去重复的清晰文字转录，使用高细节图片输入。并发可用 `--workers` 调整；请求预算、超时和页数限制均逐篇生效。
 - 每篇立即保存到 `article-*/result.json`、`quotes.tsv`、`status.json`、`events.jsonl`。根目录的 `quotes.tsv`、`results.json`、`progress.json` 在每篇结束时原子更新；`manifest.json` 固定文件选择和运行配置。
 - TSV 的“文件名（中文）”列保留来源 PDF 的原始文件名（含编号和 `.pdf` 后缀），与 JSON 的 `source_pdf_filename` 对应；使用 ZIP 内的文件名，不使用内部暂存编号或推断的文章标题。续跑旧批次时会补齐这一列，无需重新调用模型。
 - 分类请求使用短条号（`q1` 至 `q20`）并在 schema 中枚举允许值，避免模型抄错较长的来源条号；本地保存审计映射，输出继续使用原始条号。重复出现的同文引文保留为独立记录。
-- 处理学位论文等长文献时加 `--long-documents`：超过 20 页的 PDF 按 10 页一组确认文章与续文边界，完整处理全部页面，`--max-calls` 预算按组生效。每组保存 `parts/part-*/result.json`；有效文字层直接用于规划和提取，损坏文字层仍读图，标题或坐标校验失败时补做图像规划。合并时保留原始页码与区域证据，并补回跨组引文；边界不明或任何一组未完成时不会标记完整结束。旧分组只有来源哈希、prompt、模型、标题和页码一致时才复用。
+- 处理学位论文等长文献时加 `--long-documents`：通常超过 20 页的 PDF 按 10 页一组确认文章与续文边界，`gpt-4o-mini` 使用上述两页分组。完整处理全部页面，`--max-calls` 预算按组生效。每组保存 `parts/part-*/result.json`；有效文字层直接用于规划和提取，损坏文字层仍读图，标题或坐标校验失败时补做图像规划。合并时保留原始页码与区域证据，并补回跨组引文；边界不明或任何一组未完成时不会标记完整结束。旧分组只有来源哈希、prompt、供应商、模型、标题和页码一致时才复用；替换分组前将旧 JSON/TSV 归档到该分组的 `attempts/`，保留实际模型来源。
 - 结构异常的 PDF 会在临时副本中规范化交叉引用、页面树或页面尺寸；原始文件与来源 SHA256 保持不变。无法恢复时保留失败状态，不作为零引文结果。
 - 同一命令再次运行，会跳过完整结束的文章，重跑未完成项；每篇 `checkpoints/` 保存通过 JSON/schema 校验的阶段结果，复用相同证据的转录。重跑前的 JSON/TSV 另存到 `attempts/`，保留既有证据。语义校验失败的规划和分类不会永久缓存重放。检查点含文献转录文字，仅保存在本地。来源、prompt、模型或配置变化时必须使用新输出目录。密钥只从供应商环境变量读取，不保存到清单或结果。
 - 在输出目录创建名为 `STOP` 的文件，停止派发任务并在下次模型调用前取消进行中任务。恢复前删除 `STOP`，重新运行原命令。
 - `pipeline_complete=true` 表示提取、查漏和分类流程结束；自动边界与视觉证据仍标为 `needs_review`。`needs_attention` 表示流程未完成，需要检查对应告警；不能把失败当作零引文。处理结束有未完成项时返回非零退出码。
+- 请求元数据中的 `status=refused` 单独标记供应商的明确拒绝；`rejected` 表示截断或其他协议状态不完整。拒绝不等于成功，也不能通过换模型或改写资料绕过。

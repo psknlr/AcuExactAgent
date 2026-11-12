@@ -44,6 +44,10 @@ class ProviderError(ValueError):
     """User-safe error: does not contain response bodies, prompts, or credentials."""
 
 
+class ProviderRefusal(ProviderError):
+    """A refusal must remain distinguishable from a truncated response."""
+
+
 def provider_options() -> list[dict]:
     """Examples, not a live inventory of models available to the user's account."""
     return [dict(id=name, provider=name, default_model=item["model"], **deepcopy(item)) for name, item in _PROVIDERS.items()]
@@ -279,21 +283,21 @@ class ModelClient:
                         continue
                     for block in item.get("content", []):
                         if block.get("type") == "refusal":
-                            raise ProviderError("模型拒绝了该请求。")
+                            raise ProviderRefusal("模型拒绝了该请求。")
                         if block.get("type") == "output_text":
                             parts.append(block["text"])
                 text = "".join(parts)
             elif provider == "anthropic":
                 reason = response.get("stop_reason")
                 if reason == "refusal":
-                    raise ProviderError("模型拒绝了该请求。")
+                    raise ProviderRefusal("模型拒绝了该请求。")
                 if reason != "end_turn":
                     raise ProviderError("模型输出未完成或已截断；请减少输入或增加输出上限。")
                 text = "".join(block["text"] for block in response.get("content", []) if block.get("type") == "text")
             else:
                 choice = response["choices"][0]
                 if choice["message"].get("refusal") or choice.get("finish_reason") == "content_filter":
-                    raise ProviderError("模型拒绝了该请求。")
+                    raise ProviderRefusal("模型拒绝了该请求。")
                 if choice.get("finish_reason") != "stop":
                     raise ProviderError("模型输出未完成或已截断；请减少输入或增加输出上限。")
                 text = choice["message"]["content"]
@@ -351,8 +355,8 @@ class ModelClient:
             response = self._request(path, body, key, bool(generation))
             try:
                 text = self._text(response).strip()
-            except ProviderError:
-                self.calls[-1]["status"] = "rejected"
+            except ProviderError as exc:
+                self.calls[-1]["status"] = "refused" if isinstance(exc, ProviderRefusal) else "rejected"
                 raise
             if repairable:
                 text = re.sub(r"^<think>.*?</think>\s*", "", text, count=1, flags=re.DOTALL)

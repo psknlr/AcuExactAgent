@@ -1,13 +1,16 @@
 import tempfile
+from contextlib import contextmanager
 import csv
 import json
 from pathlib import Path
 import unittest
+from types import SimpleNamespace
 from unittest.mock import patch
 import zipfile
 
 from acuexact.agent_batch import CheckpointClient, _run_one, pipeline_complete, run_batch, select_jobs
 from acuexact.providers import ModelClient, ProviderConfig
+from test_agent import FakeClient, FakePage, plan
 
 
 class AgentBatchTests(unittest.TestCase):
@@ -34,7 +37,8 @@ class AgentBatchTests(unittest.TestCase):
                   "warnings": [{"code": "automatic_article_boundary_requires_review"}],
                   "quotes": [{"relevance": {"method": "llm_agent"}}]}
         self.assertTrue(pipeline_complete(result))
-        for warning in ("agent_incomplete", "quote_review_failed", "vision_required"):
+        for warning in ("agent_incomplete", "quote_review_failed", "vision_required",
+                        "unclosed_quote", "unmatched_closing_quote"):
             result["warnings"] = [{"code": warning}]
             self.assertFalse(pipeline_complete(result))
         result["warnings"] = []
@@ -74,6 +78,42 @@ class AgentBatchTests(unittest.TestCase):
                 self.assertEqual(generated.call_count, 1)
                 self.assertEqual(client.calls[-1]["status"], "cache_hit")
 
+    def test_switching_provider_does_not_relabel_or_reuse_old_checkpoint(self):
+        schema = {"type": "object", "properties": {"text": {"type": "string"}}, "required": ["text"]}
+        with tempfile.TemporaryDirectory() as directory:
+            old = CheckpointClient(ProviderConfig("minimax", "MiniMax-M3.1-Flash"), directory)
+            new = CheckpointClient(ProviderConfig("openai", "gpt-4o-mini"), directory)
+            with patch.object(ModelClient, "generate_json", side_effect=[{"text": "旧模型"}, {"text": "新模型"}]) as generated:
+                self.assertEqual(old.generate_json("read", {}, schema), {"text": "旧模型"})
+                self.assertEqual(new.generate_json("read", {}, schema), {"text": "新模型"})
+                self.assertEqual(new.generate_json("read", {}, schema), {"text": "新模型"})
+                self.assertEqual(generated.call_count, 2)
+                self.assertEqual(new.calls[-1]["model"], "gpt-4o-mini")
+                self.assertEqual(old.generate_json("read", {}, schema), {"text": "旧模型"})
+
+    def test_gpt4o_mini_batch_uses_small_parts_and_preserves_all_original_pages(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            pdf = root / "source.pdf"; pdf.write_bytes(b"same-source")
+            pages = [FakePage("肩痛研究" + "正常正文内容。" * 20) for _ in range(5)]
+
+            @contextmanager
+            def opened(_):
+                yield SimpleNamespace(pages=pages)
+
+            client = FakeClient({"plan_article": lambda payload: plan(pages=tuple(p["page"] for p in payload["pages"]))}, vision=True)
+            client.config = ProviderConfig("openai", "gpt-4o-mini", vision=True)
+            job = {"id": "article-1", "title": "肩痛研究", "pdf": str(pdf), "member": "folder/1 原始中文名.pdf"}
+            settings = {"out": directory, "prompt": "extract", "max_pages": 20, "max_calls": 80,
+                        "long_documents": True, "config": {"provider": "openai", "model": "gpt-4o-mini", "vision": True}}
+            with patch("acuexact.pdf.open_pdf", opened), patch("acuexact.agent.open_pdf", opened), patch("acuexact.agent_batch.CheckpointClient", return_value=client):
+                record = _run_one(job, settings)
+            self.assertTrue(record["pipeline_complete"])
+            result = json.loads((root / "article-1/result.json").read_text(encoding="utf-8"))
+            self.assertEqual(result["source_pdf_filename"], "1 原始中文名.pdf")
+            self.assertEqual(result["audit"]["selected_pages"], [1, 2, 3, 4, 5])
+            self.assertEqual([p["pages"] for p in result["audit"]["parts"]], [[1, 2], [3, 4], [5]])
+
     def test_resume_skips_completed_paper_and_refuses_changed_prompt(self):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory).resolve()
@@ -107,6 +147,33 @@ class AgentBatchTests(unittest.TestCase):
                 self.assertEqual(aggregate["quotes"], result["quotes"])
                 with self.assertRaisesRegex(ValueError, "differs"):
                     run_batch(source, output, "different research", config, workers=1)
+
+    def test_short_batch_reuses_clear_text_and_still_transcribes_damaged_text(self):
+        for damaged in (False, True):
+            with self.subTest(damaged=damaged), tempfile.TemporaryDirectory() as directory:
+                root = Path(directory)
+                pdf = root / "source.pdf"; pdf.write_bytes(b"same-source")
+                text = '(cid:123)' if damaged else '肩痛研究的完整正文引文“肩臂疼痛，气血不通。”'
+
+                @contextmanager
+                def opened(_):
+                    yield SimpleNamespace(pages=[FakePage(text)])
+
+                client = FakeClient({"region_transcription": {
+                    "text": '肩痛研究的完整正文引文“肩臂疼痛，气血不通。”',
+                    "uncertainties": [], "confidence": .9}}, vision=True)
+                client.config = ProviderConfig("openai", "gpt-4o-mini", vision=True)
+                job = {"id": "article-1", "title": "肩痛研究", "pdf": str(pdf), "member": "1 原始中文名.pdf"}
+                settings = {"out": directory, "prompt": "extract", "max_pages": 20, "max_calls": 80,
+                            "config": {"provider": "openai", "model": "gpt-4o-mini", "vision": True}}
+                with patch("acuexact.agent.open_pdf", opened), patch("acuexact.agent_batch.CheckpointClient", return_value=client):
+                    record = _run_one(job, settings)
+                self.assertTrue(record["pipeline_complete"])
+                self.assertEqual("region_transcription" in [r["stage"] for r in client.requests], damaged)
+                self.assertTrue(client.requests[0]["images"])
+                result = json.loads((root / "article-1/result.json").read_text())
+                self.assertEqual(result["quotes"][0]["text"], "肩臂疼痛，气血不通。")
+                self.assertEqual(result["segments"][0]["method"], "vision_transcription" if damaged else "pdf_text")
 
     def test_retry_archives_prior_evidence_before_replacing_result(self):
         with tempfile.TemporaryDirectory() as directory:

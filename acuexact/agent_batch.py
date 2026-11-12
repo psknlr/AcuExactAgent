@@ -73,7 +73,8 @@ class CheckpointClient(ModelClient):
 
 def pipeline_complete(result):
     incomplete = {"agent_incomplete", "call_budget_exceeded", "cancelled", "quote_review_failed",
-                  "quote_review_incomplete", "vision_required", "unreadable_region_requires_vision"}
+                  "quote_review_incomplete", "vision_required", "unreadable_region_requires_vision",
+                  "unclosed_quote", "unmatched_closing_quote"}
     return (result.get("status") in {"completed", "needs_review"}
             and "review_quotes" in result.get("audit", {}).get("stages", [])
             and not any(w.get("code") in incomplete for w in result.get("warnings", []))
@@ -137,16 +138,23 @@ def _run_one(job, settings):
             from .pdf import open_pdf
             with open_pdf(job["pdf"]) as pdf:
                 job = dict(job, total_pages=len(pdf.pages))
-        if settings.get("long_documents") and job.get("total_pages", 0) > 20:
+        # High-detail gpt-4o-mini page images use far more tokens than M3's.
+        # Keep its planning groups small while retaining continuous-article
+        # checks, original page numbers, and quotes spanning group boundaries.
+        small_vision_context = (client.config.vision and client.config.provider == "openai"
+            and client.config.model in {"gpt-4o-mini", "gpt-4o-mini-2024-07-18"})
+        page_threshold = 2 if small_vision_context else 20
+        if settings.get("long_documents") and job.get("total_pages", 0) > page_threshold:
             from .agent_long import run_long_pdf_agent
             result = run_long_pdf_agent(job["pdf"], settings["prompt"], client, total_pages=job["total_pages"],
                 directory=directory, target_title=job["title"], max_calls=settings["max_calls"],
-                on_event=event, cancelled=cancelled)
+                on_event=event, cancelled=cancelled, pages_per_part=2 if small_vision_context else 10)
         else:
             result = run_pdf_agent(job["pdf"], settings["prompt"], client,
                                    target_title=job["title"], max_pages=settings["max_pages"],
                                    max_calls=settings["max_calls"], on_event=event,
-                                   transcribe_pages=False, cancelled=cancelled)
+                                   transcribe_pages=False, transcribe_clean_regions=False,
+                                   cancelled=cancelled)
         # Write complete payloads first; status.json is the commit marker for resume.
         write_result(result, directory, source_filename=Path(job.get("member", job["pdf"])).name)
         complete = pipeline_complete(result)
@@ -297,7 +305,7 @@ def configure_parser(commands):
     parser.add_argument("--max-tokens", type=int, default=16000)
     parser.add_argument("--max-pages", type=int, default=20)
     parser.add_argument("--max-calls", type=int, default=80)
-    parser.add_argument("--long-documents", action="store_true", help="Read continuous long articles in 10-page groups; max-calls applies per group")
+    parser.add_argument("--long-documents", action="store_true", help="Read continuous articles in bounded groups (2 pages for gpt-4o-mini vision, otherwise 10); max-calls applies per group")
     parser.add_argument("--text-only", action="store_true")
 
 

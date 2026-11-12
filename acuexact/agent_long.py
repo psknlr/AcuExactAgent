@@ -4,12 +4,15 @@ from __future__ import annotations
 import copy
 import json
 from pathlib import Path
+import shutil
+import time
 
 from .agent import (CLASSIFY_SYSTEM, _class_schema, _model, _validate_classification,
                     _title_key, run_pdf_agent)
 from .extraction import extract_quotes
 from .export import write_result
 from .pdf import file_sha256
+from .providers import ProviderRefusal
 
 
 def merge_parts(parts):
@@ -90,6 +93,8 @@ def merge_parts(parts):
 def run_long_pdf_agent(pdf_path, prompt, client, *, total_pages, directory, target_title,
                        max_calls=80, on_event=None, cancelled=None, pages_per_part=10):
     from .agent_batch import pipeline_complete
+    if type(pages_per_part) is not int or not 1 <= pages_per_part <= 20:
+        raise ValueError("pages_per_part must be an integer from 1 to 20")
     parts, merged = [], None
     source_digest = file_sha256(pdf_path)
     directory = Path(directory)
@@ -105,8 +110,19 @@ def run_long_pdf_agent(pdf_path, prompt, client, *, total_pages, directory, targ
             and part["audit"].get("pdf_sha256") == source_digest
             and part["audit"].get("research_prompt") == prompt
             and _title_key(part["article"]["title"]) == _title_key(merged["article"]["title"] if merged else target_title)
-            and all(c.get("model") == _model(client) for c in part["audit"].get("model_calls", [])))
+            and all(c.get("model") == _model(client)
+                and (not getattr(getattr(client, "config", None), "provider", None)
+                     or c.get("provider") == client.config.provider)
+                for c in part["audit"].get("model_calls", [])))
         if not valid_cache:
+            if part:
+                # A provider/model or page-group change must not erase the
+                # earlier result, nor relabel it as work by the new model.
+                archived = destination / "attempts" / str(time.time_ns())
+                archived.mkdir(parents=True)
+                shutil.copy2(cached, archived / "result.json")
+                if (destination / "quotes.tsv").exists():
+                    shutil.copy2(destination / "quotes.tsv", archived / "quotes.tsv")
             if part and not pipeline_complete(part):
                 for checkpoint in (directory / "checkpoints").glob("*.json"):
                     value = json.loads(checkpoint.read_text(encoding="utf-8"))
@@ -146,6 +162,9 @@ def run_long_pdf_agent(pdf_path, prompt, client, *, total_pages, directory, targ
                 for alias, q in aliases.items():
                     q["relevance"] = dict(mapping[alias], method="llm_agent", model=_model(client))
                     q["relevance"].pop("id", None)
+            except ProviderRefusal:
+                merged["warnings"].append({"code": "agent_incomplete", "detail": "模型拒绝了该请求。跨段分类已停止。"})
+                break
             except Exception:
                 merged["warnings"].append({"code": "agent_incomplete", "detail": "跨段引文尚未完成模型分类。"})
             finally:

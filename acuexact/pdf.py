@@ -123,6 +123,14 @@ def text_quality_flags(text):
         flags.append("control_characters")
     if text.count("“") != text.count("”"):
         flags.append("unbalanced_curly_quotes")
+    # Legacy CJK fonts may map punctuation/digits to printable ASCII rather
+    # than CID or replacement glyphs. Such text can hide every quoted phrase.
+    cjk_count = len(re.findall(r"[\u3400-\u9fff]", text))
+    symbol_gaps = len(re.findall(r"(?<=[\u3400-\u9fff])[%!*#@](?=[\u3400-\u9fff])", text))
+    if cjk_count >= 50 and symbol_gaps >= 5 and symbol_gaps / cjk_count >= .02:
+        flags.append("suspicious_punctuation_mapping")
+    if cjk_count >= 50 and re.search(r"5[\u3400-\u9fff][^5\n]{0,60}6", text) and re.search(r"/\s*[\u3400-\u9fff][^/\n]{1,120}0", text):
+        flags.append("mapped_quote_delimiters")
     return flags
 
 

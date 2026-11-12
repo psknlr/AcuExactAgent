@@ -46,6 +46,38 @@ class MergeLongTests(unittest.TestCase):
 
 
 class ContinuationTests(unittest.TestCase):
+    def test_model_switch_archives_previous_parts_before_replacement(self):
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "long.pdf"; path.write_bytes(b"same-source")
+            pages = [FakePage("肩痛研究" + "正常正文内容。" * 20) for _ in range(3)]
+
+            @contextmanager
+            def opened(_):
+                yield SimpleNamespace(pages=pages)
+
+            dynamic_plan = lambda payload: plan(pages=tuple(page["page"] for page in payload["pages"]))
+            with patch("acuexact.agent.open_pdf", opened):
+                old_client = FakeClient({"plan_article": dynamic_plan}, vision=True)
+                run_long_pdf_agent(path, "提取引文", old_client, total_pages=3,
+                    directory=directory, target_title="肩痛研究", pages_per_part=2)
+                prior = Path(directory) / "parts/part-0001/result.json"
+                old_bytes = prior.read_bytes()
+                client = FakeClient({"plan_article": dynamic_plan}, vision=True)
+                client.config.model = "gpt-4o-mini"
+                result = run_long_pdf_agent(path, "提取引文", client, total_pages=3,
+                    directory=directory, target_title="肩痛研究", pages_per_part=2)
+                self.assertTrue(pipeline_complete(result))
+                self.assertEqual(result["audit"]["selected_pages"], [1, 2, 3])
+                archived = next(prior.parent.glob("attempts/*/result.json"))
+                self.assertEqual(archived.read_bytes(), old_bytes)
+                self.assertTrue(all(c["model"] == "gpt-4o-mini" for c in result["audit"]["model_calls"]))
+
+    def test_invalid_part_size_rejected_before_reading_source(self):
+        for size in (0, -1, 21, True, 2.5):
+            with self.assertRaisesRegex(ValueError, "pages_per_part"):
+                run_long_pdf_agent("unused.pdf", "extract", FakeClient(), total_pages=3,
+                    directory="unused", target_title="paper", pages_per_part=size)
+
     def test_long_document_reads_every_page_and_resumes_completed_parts(self):
         with tempfile.TemporaryDirectory() as directory:
             path = Path(directory) / "long.pdf"
