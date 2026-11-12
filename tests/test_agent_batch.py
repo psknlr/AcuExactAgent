@@ -171,7 +171,7 @@ class AgentBatchTests(unittest.TestCase):
                 self.assertTrue(record["pipeline_complete"])
                 self.assertEqual("region_transcription" in [r["stage"] for r in client.requests], damaged)
                 self.assertTrue(client.requests[0]["images"])
-                result = json.loads((root / "article-1/result.json").read_text())
+                result = json.loads((root / "article-1/result.json").read_text(encoding="utf-8"))
                 self.assertEqual(result["quotes"][0]["text"], "肩臂疼痛，气血不通。")
                 self.assertEqual(result["segments"][0]["method"], "vision_transcription" if damaged else "pdf_text")
 
